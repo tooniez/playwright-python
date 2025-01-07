@@ -1,14 +1,17 @@
-FROM ubuntu:focal
+FROM ubuntu:noble
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TZ=America/Los_Angeles
-ARG DOCKER_IMAGE_NAME_TEMPLATE="mcr.microsoft.com/playwright/python:v%version%-focal"
+ARG DOCKER_IMAGE_NAME_TEMPLATE="mcr.microsoft.com/playwright/python:v%version%-noble"
 
 # === INSTALL Python ===
 
 RUN apt-get update && \
     # Install Python
-    apt-get install -y python3 python3-distutils curl && \
+    apt-get install -y python3 curl && \
+    # Align with upstream Python image and don't be externally managed:
+    # https://github.com/docker-library/python/issues/948
+    rm /usr/lib/python3.12/EXTERNALLY-MANAGED && \
     update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
     curl -sSL https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \
     python get-pip.py && \

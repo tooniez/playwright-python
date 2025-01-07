@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import asyncio
-import sys
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -43,16 +42,18 @@ from playwright._impl._helper import (
     DocumentLoadState,
     FrameNavigatedEvent,
     KeyboardModifier,
+    Literal,
     MouseButton,
     URLMatch,
-    URLMatcher,
     async_readfile,
     locals_to_params,
     monotonic_time,
+    url_matches,
 )
 from playwright._impl._js_handle import (
     JSHandle,
     Serializable,
+    add_source_url_to_script,
     parse_result,
     serialize_argument,
 )
@@ -71,11 +72,6 @@ from playwright._impl._locator import (
 from playwright._impl._network import Response
 from playwright._impl._set_input_files_helpers import convert_input_files
 from playwright._impl._waiter import Waiter
-
-if sys.version_info >= (3, 8):  # pragma: no cover
-    from typing import Literal
-else:  # pragma: no cover
-    from typing_extensions import Literal
 
 if TYPE_CHECKING:  # pragma: no cover
     from playwright._impl._page import Page
@@ -189,18 +185,17 @@ class Frame(ChannelOwner):
 
         to_url = f' to "{url}"' if url else ""
         waiter.log(f"waiting for navigation{to_url} until '{waitUntil}'")
-        matcher = (
-            URLMatcher(self._page._browser_context._options.get("baseURL"), url)
-            if url
-            else None
-        )
 
         def predicate(event: Any) -> bool:
             # Any failed navigation results in a rejection.
             if event.get("error"):
                 return True
             waiter.log(f'  navigated to "{event["url"]}"')
-            return not matcher or matcher.matches(event["url"])
+            return url_matches(
+                cast("Page", self._page)._browser_context._options.get("baseURL"),
+                event["url"],
+                url,
+            )
 
         waiter.wait_for_event(
             self._event_emitter,
@@ -230,8 +225,9 @@ class Frame(ChannelOwner):
         timeout: float = None,
     ) -> None:
         assert self._page
-        matcher = URLMatcher(self._page._browser_context._options.get("baseURL"), url)
-        if matcher.matches(self.url):
+        if url_matches(
+            self._page._browser_context._options.get("baseURL"), self.url, url
+        ):
             await self._wait_for_load_state_impl(state=waitUntil, timeout=timeout)
             return
         async with self.expect_navigation(
@@ -455,10 +451,8 @@ class Frame(ChannelOwner):
     ) -> ElementHandle:
         params = locals_to_params(locals())
         if path:
-            params["content"] = (
-                (await async_readfile(path)).decode()
-                + "\n//# sourceURL="
-                + str(Path(path))
+            params["content"] = add_source_url_to_script(
+                (await async_readfile(path)).decode(), path
             )
             del params["path"]
         return from_channel(await self._channel.send("addScriptTag", params))
@@ -676,7 +670,6 @@ class Frame(ChannelOwner):
             dict(
                 selector=selector,
                 timeout=timeout,
-                noWaitAfter=noWaitAfter,
                 strict=strict,
                 force=force,
                 **convert_select_option_values(value, index, label, element),
@@ -709,7 +702,6 @@ class Frame(ChannelOwner):
                 "selector": selector,
                 "strict": strict,
                 "timeout": timeout,
-                "noWaitAfter": noWaitAfter,
                 **converted,
             },
         )
@@ -798,7 +790,6 @@ class Frame(ChannelOwner):
                 position=position,
                 timeout=timeout,
                 force=force,
-                noWaitAfter=noWaitAfter,
                 strict=strict,
                 trial=trial,
             )
@@ -808,7 +799,6 @@ class Frame(ChannelOwner):
                 position=position,
                 timeout=timeout,
                 force=force,
-                noWaitAfter=noWaitAfter,
                 strict=strict,
                 trial=trial,
             )

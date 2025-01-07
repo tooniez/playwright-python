@@ -16,6 +16,7 @@ import asyncio
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Generator, List
 
 import pytest
+from pytest_asyncio import is_async_test
 
 from playwright.async_api import (
     Browser,
@@ -38,8 +39,10 @@ def utils() -> Generator[Utils, None, None]:
 
 # Will mark all the tests as async
 def pytest_collection_modifyitems(items: List[pytest.Item]) -> None:
-    for item in items:
-        item.add_marker(pytest.mark.asyncio)
+    pytest_asyncio_tests = (item for item in items if is_async_test(item))
+    session_scope_marker = pytest.mark.asyncio(loop_scope="session")
+    for async_test in pytest_asyncio_tests:
+        async_test.add_marker(session_scope_marker, append=False)
 
 
 @pytest.fixture(scope="session")
@@ -84,6 +87,11 @@ async def browser(
     await browser.close()
 
 
+@pytest.fixture(scope="session")
+def browser_version(browser: Browser) -> str:
+    return browser.version
+
+
 @pytest.fixture
 async def context_factory(
     browser: Browser,
@@ -101,12 +109,14 @@ async def context_factory(
 
 
 @pytest.fixture(scope="session")
-async def default_same_site_cookie_value(browser_name: str) -> str:
+def default_same_site_cookie_value(browser_name: str, is_linux: bool) -> str:
     if browser_name == "chromium":
         return "Lax"
     if browser_name == "firefox":
         return "None"
-    if browser_name == "webkit":
+    if browser_name == "webkit" and is_linux:
+        return "Lax"
+    if browser_name == "webkit" and not is_linux:
         return "None"
     raise Exception(f"Invalid browser_name: {browser_name}")
 

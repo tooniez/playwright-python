@@ -1,6 +1,54 @@
 [build-system]
-requires = ["setuptools==68.2.2", "setuptools-scm==8.0.4", "wheel==0.41.2", "auditwheel==5.4.0"]
+requires = ["setuptools==75.6.0", "setuptools-scm==8.1.0", "wheel==0.45.1", "auditwheel==6.1.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "playwright"
+description = "A high-level API to automate web browsers"
+authors = [
+    {name = "Microsoft Corporation"}
+]
+readme = "README.md"
+license = {text = "Apache-2.0"}
+dynamic = ["version"]
+requires-python = ">=3.9"
+dependencies = [
+    "greenlet==3.1.1",
+    "pyee==12.1.1",
+]
+classifiers = [
+    "Topic :: Software Development :: Testing",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+homepage = "https://github.com/Microsoft/playwright-python"
+"Release notes" = "https://github.com/microsoft/playwright-python/releases"
+
+[project.scripts]
+playwright = "playwright.__main__:main"
+
+[project.entry-points.pyinstaller40]
+hook-dirs = "playwright._impl.__pyinstaller:get_hook_dirs"
+
+[tool.setuptools]
+packages = [
+    "playwright",
+    "playwright.async_api",
+    "playwright.sync_api",
+    "playwright._impl",
+    "playwright._impl.__pyinstaller",
+]
+include-package-data = true
 
 [tool.setuptools_scm]
 version_file = "playwright/_repo_version.py"
@@ -15,10 +63,11 @@ markers = [
 ]
 junit_family = "xunit2"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
 
 [tool.mypy]
 ignore_missing_imports = true
-python_version = "3.8"
+python_version = "3.9"
 warn_unused_ignores = false
 warn_redundant_casts = true
 warn_unused_configs = true
@@ -35,10 +84,12 @@ profile = "black"
 
 [tool.pyright]
 include = ["playwright", "tests", "scripts"]
-pythonVersion = "3.8"
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "./build"]
+pythonVersion = "3.9"
 reportMissingImports = false
 reportTypedDictNotRequiredAccess = false
 reportCallInDefaultInitializer = true
 reportOptionalSubscript = false
 reportUnboundVariable = false
 strictParameterNoneValue = false
+reportIncompatibleVariableOverride = false

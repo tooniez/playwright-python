@@ -242,7 +242,8 @@ async def test_timeout_waiting_for_display_none_to_be_gone(
         error = e
     assert "Timeout 5000ms exceeded" in error.message
     assert "waiting for element to be visible, enabled and stable" in error.message
-    assert "element is not visible - waiting" in error.message
+    assert "element is not visible" in error.message
+    assert "retrying click action" in error.message
 
 
 async def test_timeout_waiting_for_visbility_hidden_to_be_gone(
@@ -256,7 +257,8 @@ async def test_timeout_waiting_for_visbility_hidden_to_be_gone(
         error = e
     assert "Timeout 5000ms exceeded" in error.message
     assert "waiting for element to be visible, enabled and stable" in error.message
-    assert "element is not visible - waiting" in error.message
+    assert "element is not visible" in error.message
+    assert "retrying click action" in error.message
 
 
 async def test_waitFor_visible_when_parent_is_hidden(
@@ -545,6 +547,10 @@ async def test_wait_for_stable_position(page: Page, server: Server) -> None:
             document.body.style.margin = '0';
         }""",
     )
+    # rafraf for Firefox to kick in the animation.
+    await page.evaluate(
+        "() => new Promise(f => requestAnimationFrame(() => requestAnimationFrame(f)))"
+    )
 
     await page.click("button")
     assert await page.evaluate("window.result") == "Clicked"
@@ -562,13 +568,18 @@ async def test_timeout_waiting_for_stable_position(page: Page, server: Server) -
             button.style.marginLeft = '200px'
         }"""
     )
+    # rafraf for Firefox to kick in the animation.
+    await page.evaluate(
+        "() => new Promise(f => requestAnimationFrame(() => requestAnimationFrame(f)))"
+    )
 
     with pytest.raises(Error) as exc_info:
         await button.click(timeout=3000)
     error = exc_info.value
     assert "Timeout 3000ms exceeded." in error.message
     assert "waiting for element to be visible, enabled and stable" in error.message
-    assert "element is not stable - waiting" in error.message
+    assert "element is not stable" in error.message
+    assert "retrying click action" in error.message
 
 
 async def test_wait_for_becoming_hit_target(page: Page, server: Server) -> None:
@@ -696,7 +707,8 @@ async def test_timeout_waiting_for_button_to_be_enabled(
     assert await page.evaluate("window.__CLICKED") is None
     assert error
     assert "Timeout 3000ms exceeded" in error.message
-    assert "element is not enabled - waiting" in error.message
+    assert "element is not enabled" in error.message
+    assert "retrying click action" in error.message
 
 
 async def test_wait_for_input_to_be_enabled(page: Page, server: Server) -> None:

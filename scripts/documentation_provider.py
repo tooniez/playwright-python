@@ -96,9 +96,9 @@ class DocumentationProvider:
         new_name = to_snake_case(alias)
         if kind == "event":
             new_name = new_name.lower()
-            self.links[
-                f"[`event: {clazz}.{member}`]"
-            ] = f"`{var_name}.on('{new_name}')`"
+            self.links[f"[`event: {clazz}.{member}`]"] = (
+                f"`{var_name}.on('{new_name}')`"
+            )
         elif kind == "property":
             self.links[f"[`property: {clazz}.{member}`]"] = f"`{var_name}.{new_name}`"
         else:
@@ -132,7 +132,11 @@ class DocumentationProvider:
         doc_is_property = (
             not method.get("async") and not len(method["args"]) and "type" in method
         )
-        if method["name"].startswith("is_") or method["name"].startswith("as_"):
+        if (
+            method["name"].startswith("is_")
+            or method["name"].startswith("as_")
+            or method["name"] == "connect_to_server"
+        ):
             doc_is_property = False
         if doc_is_property != is_property:
             self.errors.add(f"Method vs property mismatch: {fqname}")
@@ -350,6 +354,8 @@ class DocumentationProvider:
             return "Error"
         if str_value == "<class 'NoneType'>":
             return "None"
+        if str_value == "<class 'datetime.datetime'>":
+            return "datetime.datetime"
         match = re.match(r"^<class '((?:pathlib\.)?\w+)'>$", str_value)
         if match:
             return match.group(1)
@@ -479,6 +485,8 @@ class DocumentationProvider:
             return f"{{{', '.join(items)}}}"
         if type_name == "boolean":
             return "bool"
+        if type_name == "long":
+            return "int"
         if type_name.lower() == "string":
             return "str"
         if type_name == "any" or type_name == "Serializable":
@@ -489,6 +497,8 @@ class DocumentationProvider:
             return "Callable"
         if type_name == "Buffer" or type_name == "ReadStream":
             return "bytes"
+        if type_name == "Date":
+            return "datetime.datetime"
         if type_name == "URL":
             return "str"
         if type_name == "RegExp":

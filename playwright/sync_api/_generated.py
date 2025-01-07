@@ -13,17 +13,14 @@
 # limitations under the License.
 
 
+import datetime
 import pathlib
-import sys
 import typing
-
-if sys.version_info >= (3, 8):  # pragma: no cover
-    from typing import Literal
-else:  # pragma: no cover
-    from typing_extensions import Literal
+from typing import Literal
 
 from playwright._impl._accessibility import Accessibility as AccessibilityImpl
 from playwright._impl._api_structures import (
+    ClientCertificate,
     Cookie,
     FilePayload,
     FloatRect,
@@ -40,6 +37,7 @@ from playwright._impl._api_structures import (
     SetCookieParam,
     SourceLocation,
     StorageState,
+    TracingGroupLocation,
     ViewportSize,
 )
 from playwright._impl._assertions import (
@@ -51,6 +49,7 @@ from playwright._impl._browser import Browser as BrowserImpl
 from playwright._impl._browser_context import BrowserContext as BrowserContextImpl
 from playwright._impl._browser_type import BrowserType as BrowserTypeImpl
 from playwright._impl._cdp_session import CDPSession as CDPSessionImpl
+from playwright._impl._clock import Clock as ClockImpl
 from playwright._impl._console_message import ConsoleMessage as ConsoleMessageImpl
 from playwright._impl._dialog import Dialog as DialogImpl
 from playwright._impl._download import Download as DownloadImpl
@@ -71,6 +70,7 @@ from playwright._impl._network import Request as RequestImpl
 from playwright._impl._network import Response as ResponseImpl
 from playwright._impl._network import Route as RouteImpl
 from playwright._impl._network import WebSocket as WebSocketImpl
+from playwright._impl._network import WebSocketRoute as WebSocketRouteImpl
 from playwright._impl._page import Page as PageImpl
 from playwright._impl._page import Worker as WorkerImpl
 from playwright._impl._playwright import Playwright as PlaywrightImpl
@@ -87,6 +87,7 @@ from playwright._impl._web_error import WebError as WebErrorImpl
 
 
 class Request(SyncBase):
+
     @property
     def url(self) -> str:
         """Request.url
@@ -368,7 +369,7 @@ class Request(SyncBase):
     def header_value(self, name: str) -> typing.Optional[str]:
         """Request.header_value
 
-        Returns the value of the header matching the name. The name is case insensitive.
+        Returns the value of the header matching the name. The name is case-insensitive.
 
         Parameters
         ----------
@@ -389,6 +390,7 @@ mapping.register(RequestImpl, Request)
 
 
 class Response(SyncBase):
+
     @property
     def url(self) -> str:
         """Response.url
@@ -517,7 +519,7 @@ class Response(SyncBase):
     def header_value(self, name: str) -> typing.Optional[str]:
         """Response.header_value
 
-        Returns the value of the header matching the name. The name is case insensitive. If multiple headers have the same
+        Returns the value of the header matching the name. The name is case-insensitive. If multiple headers have the same
         name (except `set-cookie`), they are returned as a list separated by `, `. For `set-cookie`, the `\\n` separator is
         used. If no headers are found, `null` is returned.
 
@@ -538,7 +540,7 @@ class Response(SyncBase):
     def header_values(self, name: str) -> typing.List[str]:
         """Response.header_values
 
-        Returns all values of the headers matching the name, for example `set-cookie`. The name is case insensitive.
+        Returns all values of the headers matching the name, for example `set-cookie`. The name is case-insensitive.
 
         Parameters
         ----------
@@ -629,6 +631,7 @@ mapping.register(ResponseImpl, Response)
 
 
 class Route(SyncBase):
+
     @property
     def request(self) -> "Request":
         """Route.request
@@ -681,7 +684,7 @@ class Route(SyncBase):
         json: typing.Optional[typing.Any] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
         content_type: typing.Optional[str] = None,
-        response: typing.Optional["APIResponse"] = None
+        response: typing.Optional["APIResponse"] = None,
     ) -> None:
         """Route.fulfill
 
@@ -746,7 +749,8 @@ class Route(SyncBase):
         headers: typing.Optional[typing.Dict[str, str]] = None,
         post_data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
         max_redirects: typing.Optional[int] = None,
-        timeout: typing.Optional[float] = None
+        max_retries: typing.Optional[int] = None,
+        timeout: typing.Optional[float] = None,
     ) -> "APIResponse":
         """Route.fetch
 
@@ -786,6 +790,9 @@ class Route(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
 
@@ -802,6 +809,7 @@ class Route(SyncBase):
                     headers=mapping.to_impl(headers),
                     postData=mapping.to_impl(post_data),
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                     timeout=timeout,
                 )
             )
@@ -813,16 +821,19 @@ class Route(SyncBase):
         url: typing.Optional[str] = None,
         method: typing.Optional[str] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
-        post_data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None
+        post_data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
     ) -> None:
         """Route.fallback
+
+        Continues route's request with optional overrides. The method is similar to `route.continue_()` with the
+        difference that other matching handlers will be invoked before sending the request.
+
+        **Usage**
 
         When several routes match the given pattern, they run in the order opposite to their registration. That way the
         last registered route can always override all the previous ones. In the example below, request will be handled by
         the bottom-most handler first, then it'll fall back to the previous one and in the end will be aborted by the first
         registered route.
-
-        **Usage**
 
         ```py
         page.route(\"**/*\", lambda route: route.abort())  # Runs last.
@@ -870,6 +881,9 @@ class Route(SyncBase):
         page.route(\"**/*\", handle)
         ```
 
+        Use `route.continue_()` to immediately send the request to the network, other matching handlers won't be
+        invoked in that case.
+
         Parameters
         ----------
         url : Union[str, None]
@@ -900,11 +914,11 @@ class Route(SyncBase):
         url: typing.Optional[str] = None,
         method: typing.Optional[str] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
-        post_data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None
+        post_data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
     ) -> None:
         """Route.continue_
 
-        Continues route's request with optional overrides.
+        Sends route's request to the network with optional overrides.
 
         **Usage**
 
@@ -923,9 +937,11 @@ class Route(SyncBase):
 
         **Details**
 
-        Note that any overrides such as `url` or `headers` only apply to the request being routed. If this request results
-        in a redirect, overrides will not be applied to the new redirected request. If you want to propagate a header
-        through redirects, use the combination of `route.fetch()` and `route.fulfill()` instead.
+        The `headers` option applies to both the routed request and any redirects it initiates. However, `url`, `method`,
+        and `postData` only apply to the original request and are not carried over to redirected requests.
+
+        `route.continue_()` will immediately send the request to the network, other matching handlers won't be
+        invoked. Use `route.fallback()` If you want next matching handler in the chain to be invoked.
 
         Parameters
         ----------
@@ -955,6 +971,7 @@ mapping.register(RouteImpl, Route)
 
 
 class WebSocket(SyncBase):
+
     @typing.overload
     def on(
         self, event: Literal["close"], f: typing.Callable[["WebSocket"], "None"]
@@ -1042,7 +1059,7 @@ class WebSocket(SyncBase):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager:
         """WebSocket.expect_event
 
@@ -1075,7 +1092,7 @@ class WebSocket(SyncBase):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Any:
         """WebSocket.wait_for_event
 
@@ -1126,7 +1143,135 @@ class WebSocket(SyncBase):
 mapping.register(WebSocketImpl, WebSocket)
 
 
+class WebSocketRoute(SyncBase):
+
+    @property
+    def url(self) -> str:
+        """WebSocketRoute.url
+
+        URL of the WebSocket created in the page.
+
+        Returns
+        -------
+        str
+        """
+        return mapping.from_maybe_impl(self._impl_obj.url)
+
+    def close(
+        self, *, code: typing.Optional[int] = None, reason: typing.Optional[str] = None
+    ) -> None:
+        """WebSocketRoute.close
+
+        Closes one side of the WebSocket connection.
+
+        Parameters
+        ----------
+        code : Union[int, None]
+            Optional [close code](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close#code).
+        reason : Union[str, None]
+            Optional [close reason](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close#reason).
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.close(code=code, reason=reason))
+        )
+
+    def connect_to_server(self) -> "WebSocketRoute":
+        """WebSocketRoute.connect_to_server
+
+        By default, routed WebSocket does not connect to the server, so you can mock entire WebSocket communication. This
+        method connects to the actual WebSocket server, and returns the server-side `WebSocketRoute` instance, giving the
+        ability to send and receive messages from the server.
+
+        Once connected to the server:
+        - Messages received from the server will be **automatically forwarded** to the WebSocket in the page, unless
+          `web_socket_route.on_message()` is called on the server-side `WebSocketRoute`.
+        - Messages sent by the [`WebSocket.send()`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/send) call
+          in the page will be **automatically forwarded** to the server, unless `web_socket_route.on_message()` is
+          called on the original `WebSocketRoute`.
+
+        See examples at the top for more details.
+
+        Returns
+        -------
+        WebSocketRoute
+        """
+
+        return mapping.from_impl(self._impl_obj.connect_to_server())
+
+    def send(self, message: typing.Union[str, bytes]) -> None:
+        """WebSocketRoute.send
+
+        Sends a message to the WebSocket. When called on the original WebSocket, sends the message to the page. When called
+        on the result of `web_socket_route.connect_to_server()`, sends the message to the server. See examples at the
+        top for more details.
+
+        Parameters
+        ----------
+        message : Union[bytes, str]
+            Message to send.
+        """
+
+        return mapping.from_maybe_impl(self._impl_obj.send(message=message))
+
+    def on_message(
+        self, handler: typing.Callable[[typing.Union[str, bytes]], typing.Any]
+    ) -> None:
+        """WebSocketRoute.on_message
+
+        This method allows to handle messages that are sent by the WebSocket, either from the page or from the server.
+
+        When called on the original WebSocket route, this method handles messages sent from the page. You can handle this
+        messages by responding to them with `web_socket_route.send()`, forwarding them to the server-side connection
+        returned by `web_socket_route.connect_to_server()` or do something else.
+
+        Once this method is called, messages are not automatically forwarded to the server or to the page - you should do
+        that manually by calling `web_socket_route.send()`. See examples at the top for more details.
+
+        Calling this method again will override the handler with a new one.
+
+        Parameters
+        ----------
+        handler : Callable[[Union[bytes, str]], Any]
+            Function that will handle messages.
+        """
+
+        return mapping.from_maybe_impl(
+            self._impl_obj.on_message(handler=self._wrap_handler(handler))
+        )
+
+    def on_close(
+        self,
+        handler: typing.Callable[
+            [typing.Optional[int], typing.Optional[str]], typing.Any
+        ],
+    ) -> None:
+        """WebSocketRoute.on_close
+
+        Allows to handle [`WebSocket.close`](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close).
+
+        By default, closing one side of the connection, either in the page or on the server, will close the other side.
+        However, when `web_socket_route.on_close()` handler is set up, the default forwarding of closure is disabled,
+        and handler should take care of it.
+
+        Parameters
+        ----------
+        handler : Callable[[Union[int, None], Union[str, None]], Any]
+            Function that will handle WebSocket closure. Received an optional
+            [close code](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close#code) and an optional
+            [close reason](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/close#reason).
+        """
+
+        return mapping.from_maybe_impl(
+            self._impl_obj.on_close(handler=self._wrap_handler(handler))
+        )
+
+
+mapping.register(WebSocketRouteImpl, WebSocketRoute)
+
+
 class Keyboard(SyncBase):
+
     def down(self, key: str) -> None:
         """Keyboard.down
 
@@ -1141,7 +1286,8 @@ class Keyboard(SyncBase):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`. `ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
@@ -1249,15 +1395,16 @@ class Keyboard(SyncBase):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`. `ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
         If `key` is a single character, it is case-sensitive, so the values `a` and `A` will generate different respective
         texts.
 
-        Shortcuts such as `key: \"Control+o\"` or `key: \"Control+Shift+T\"` are supported as well. When specified with the
-        modifier, modifier is pressed and being held while the subsequent key is being pressed.
+        Shortcuts such as `key: \"Control+o\"`, `key: \"Control++` or `key: \"Control+Shift+T\"` are supported as well. When
+        specified with the modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
         **Usage**
 
@@ -1292,6 +1439,7 @@ mapping.register(KeyboardImpl, Keyboard)
 
 
 class Mouse(SyncBase):
+
     def move(self, x: float, y: float, *, steps: typing.Optional[int] = None) -> None:
         """Mouse.move
 
@@ -1300,7 +1448,9 @@ class Mouse(SyncBase):
         Parameters
         ----------
         x : float
+            X coordinate relative to the main frame's viewport in CSS pixels.
         y : float
+            Y coordinate relative to the main frame's viewport in CSS pixels.
         steps : Union[int, None]
             Defaults to 1. Sends intermediate `mousemove` events.
         """
@@ -1313,7 +1463,7 @@ class Mouse(SyncBase):
         self,
         *,
         button: typing.Optional[Literal["left", "middle", "right"]] = None,
-        click_count: typing.Optional[int] = None
+        click_count: typing.Optional[int] = None,
     ) -> None:
         """Mouse.down
 
@@ -1335,7 +1485,7 @@ class Mouse(SyncBase):
         self,
         *,
         button: typing.Optional[Literal["left", "middle", "right"]] = None,
-        click_count: typing.Optional[int] = None
+        click_count: typing.Optional[int] = None,
     ) -> None:
         """Mouse.up
 
@@ -1360,7 +1510,7 @@ class Mouse(SyncBase):
         *,
         delay: typing.Optional[float] = None,
         button: typing.Optional[Literal["left", "middle", "right"]] = None,
-        click_count: typing.Optional[int] = None
+        click_count: typing.Optional[int] = None,
     ) -> None:
         """Mouse.click
 
@@ -1369,7 +1519,9 @@ class Mouse(SyncBase):
         Parameters
         ----------
         x : float
+            X coordinate relative to the main frame's viewport in CSS pixels.
         y : float
+            Y coordinate relative to the main frame's viewport in CSS pixels.
         delay : Union[float, None]
             Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
         button : Union["left", "middle", "right", None]
@@ -1392,7 +1544,7 @@ class Mouse(SyncBase):
         y: float,
         *,
         delay: typing.Optional[float] = None,
-        button: typing.Optional[Literal["left", "middle", "right"]] = None
+        button: typing.Optional[Literal["left", "middle", "right"]] = None,
     ) -> None:
         """Mouse.dblclick
 
@@ -1402,7 +1554,9 @@ class Mouse(SyncBase):
         Parameters
         ----------
         x : float
+            X coordinate relative to the main frame's viewport in CSS pixels.
         y : float
+            Y coordinate relative to the main frame's viewport in CSS pixels.
         delay : Union[float, None]
             Time to wait between `mousedown` and `mouseup` in milliseconds. Defaults to 0.
         button : Union["left", "middle", "right", None]
@@ -1416,7 +1570,8 @@ class Mouse(SyncBase):
     def wheel(self, delta_x: float, delta_y: float) -> None:
         """Mouse.wheel
 
-        Dispatches a `wheel` event.
+        Dispatches a `wheel` event. This method is usually used to manually scroll the page. See
+        [scrolling](https://playwright.dev/python/docs/input#scrolling) for alternative ways to scroll.
 
         **NOTE** Wheel events may cause scrolling if they are not handled, and this method does not wait for the scrolling
         to finish before returning.
@@ -1438,6 +1593,7 @@ mapping.register(MouseImpl, Mouse)
 
 
 class Touchscreen(SyncBase):
+
     def tap(self, x: float, y: float) -> None:
         """Touchscreen.tap
 
@@ -1448,7 +1604,9 @@ class Touchscreen(SyncBase):
         Parameters
         ----------
         x : float
+            X coordinate relative to the main frame's viewport in CSS pixels.
         y : float
+            Y coordinate relative to the main frame's viewport in CSS pixels.
         """
 
         return mapping.from_maybe_impl(self._sync(self._impl_obj.tap(x=x, y=y)))
@@ -1458,6 +1616,7 @@ mapping.register(TouchscreenImpl, Touchscreen)
 
 
 class JSHandle(SyncBase):
+
     def evaluate(
         self, expression: str, arg: typing.Optional[typing.Any] = None
     ) -> typing.Any:
@@ -1615,6 +1774,7 @@ mapping.register(JSHandleImpl, JSHandle)
 
 
 class ElementHandle(JSHandle):
+
     def as_element(self) -> typing.Optional["ElementHandle"]:
         """ElementHandle.as_element
 
@@ -1844,6 +2004,8 @@ class ElementHandle(JSHandle):
         Throws when `elementHandle` does not point to an element
         [connected](https://developer.mozilla.org/en-US/docs/Web/API/Node/isConnected) to a Document or a ShadowRoot.
 
+        See [scrolling](https://playwright.dev/python/docs/input#scrolling) for alternative ways to scroll.
+
         Parameters
         ----------
         timeout : Union[float, None]
@@ -1859,13 +2021,13 @@ class ElementHandle(JSHandle):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         force: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.hover
 
@@ -1873,7 +2035,6 @@ class ElementHandle(JSHandle):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to hover over the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -1882,9 +2043,10 @@ class ElementHandle(JSHandle):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -1892,9 +2054,8 @@ class ElementHandle(JSHandle):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         trial : Union[bool, None]
@@ -1919,7 +2080,7 @@ class ElementHandle(JSHandle):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -1928,7 +2089,7 @@ class ElementHandle(JSHandle):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.click
 
@@ -1945,9 +2106,10 @@ class ElementHandle(JSHandle):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -1966,6 +2128,7 @@ class ElementHandle(JSHandle):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -1991,7 +2154,7 @@ class ElementHandle(JSHandle):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -1999,7 +2162,7 @@ class ElementHandle(JSHandle):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.dblclick
 
@@ -2007,8 +2170,6 @@ class ElementHandle(JSHandle):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to double click in the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set. Note that if
-           the first click of the `dblclick()` triggers a navigation event, this method will throw.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -2019,9 +2180,10 @@ class ElementHandle(JSHandle):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -2035,9 +2197,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -2069,7 +2230,7 @@ class ElementHandle(JSHandle):
         ] = None,
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> typing.List[str]:
         """ElementHandle.select_option
 
@@ -2114,9 +2275,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
 
         Returns
         -------
@@ -2141,13 +2301,13 @@ class ElementHandle(JSHandle):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.tap
 
@@ -2155,7 +2315,6 @@ class ElementHandle(JSHandle):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.touchscreen` to tap the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -2166,9 +2325,10 @@ class ElementHandle(JSHandle):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -2178,9 +2338,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -2205,7 +2364,7 @@ class ElementHandle(JSHandle):
         *,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.fill
 
@@ -2227,9 +2386,8 @@ class ElementHandle(JSHandle):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         """
@@ -2246,7 +2404,7 @@ class ElementHandle(JSHandle):
         self,
         *,
         force: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """ElementHandle.select_text
 
@@ -2305,12 +2463,13 @@ class ElementHandle(JSHandle):
         ],
         *,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.set_input_files
 
         Sets the value of the file input to these file paths or files. If some of the `filePaths` are relative paths, then
-        they are resolved relative to the current working directory. For empty array, clears the selected files.
+        they are resolved relative to the current working directory. For empty array, clears the selected files. For inputs
+        with a `[webkitdirectory]` attribute, only a single directory path is supported.
 
         This method expects `ElementHandle` to point to an
         [input element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input). However, if the element is inside
@@ -2324,9 +2483,8 @@ class ElementHandle(JSHandle):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -2353,7 +2511,7 @@ class ElementHandle(JSHandle):
         *,
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.type
 
@@ -2374,9 +2532,8 @@ class ElementHandle(JSHandle):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -2393,7 +2550,7 @@ class ElementHandle(JSHandle):
         *,
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.press
 
@@ -2408,15 +2565,16 @@ class ElementHandle(JSHandle):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
         If `key` is a single character, it is case-sensitive, so the values `a` and `A` will generate different respective
         texts.
 
-        Shortcuts such as `key: \"Control+o\"` or `key: \"Control+Shift+T\"` are supported as well. When specified with the
-        modifier, modifier is pressed and being held while the subsequent key is being pressed.
+        Shortcuts such as `key: \"Control+o\"`, `key: \"Control++` or `key: \"Control+Shift+T\"` are supported as well. When
+        specified with the modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
         Parameters
         ----------
@@ -2431,6 +2589,7 @@ class ElementHandle(JSHandle):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         """
 
         return mapping.from_maybe_impl(
@@ -2449,7 +2608,7 @@ class ElementHandle(JSHandle):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.set_checked
 
@@ -2460,7 +2619,6 @@ class ElementHandle(JSHandle):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked or unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -2479,9 +2637,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -2507,7 +2664,7 @@ class ElementHandle(JSHandle):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.check
 
@@ -2517,7 +2674,6 @@ class ElementHandle(JSHandle):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked. If not, this method throws.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
@@ -2536,9 +2692,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -2563,7 +2718,7 @@ class ElementHandle(JSHandle):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """ElementHandle.uncheck
 
@@ -2573,7 +2728,6 @@ class ElementHandle(JSHandle):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now unchecked. If not, this method throws.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
@@ -2592,9 +2746,8 @@ class ElementHandle(JSHandle):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -2655,7 +2808,7 @@ class ElementHandle(JSHandle):
         scale: typing.Optional[Literal["css", "device"]] = None,
         mask: typing.Optional[typing.Sequence["Locator"]] = None,
         mask_color: typing.Optional[str] = None,
-        style: typing.Optional[str] = None
+        style: typing.Optional[str] = None,
     ) -> bytes:
         """ElementHandle.screenshot
 
@@ -2874,7 +3027,7 @@ class ElementHandle(JSHandle):
             "disabled", "editable", "enabled", "hidden", "stable", "visible"
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """ElementHandle.wait_for_element_state
 
@@ -2916,7 +3069,7 @@ class ElementHandle(JSHandle):
             Literal["attached", "detached", "hidden", "visible"]
         ] = None,
         timeout: typing.Optional[float] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> typing.Optional["ElementHandle"]:
         """ElementHandle.wait_for_selector
 
@@ -2976,11 +3129,12 @@ mapping.register(ElementHandleImpl, ElementHandle)
 
 
 class Accessibility(SyncBase):
+
     def snapshot(
         self,
         *,
         interesting_only: typing.Optional[bool] = None,
-        root: typing.Optional["ElementHandle"] = None
+        root: typing.Optional["ElementHandle"] = None,
     ) -> typing.Optional[typing.Dict]:
         """Accessibility.snapshot
 
@@ -3043,6 +3197,7 @@ mapping.register(AccessibilityImpl, Accessibility)
 
 
 class FileChooser(SyncBase):
+
     @property
     def page(self) -> "Page":
         """FileChooser.page
@@ -3090,7 +3245,7 @@ class FileChooser(SyncBase):
         ],
         *,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """FileChooser.set_files
 
@@ -3104,9 +3259,8 @@ class FileChooser(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -3124,6 +3278,7 @@ mapping.register(FileChooserImpl, FileChooser)
 
 
 class Frame(SyncBase):
+
     @property
     def page(self) -> "Page":
         """Frame.page
@@ -3195,7 +3350,7 @@ class Frame(SyncBase):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        referer: typing.Optional[str] = None
+        referer: typing.Optional[str] = None,
     ) -> typing.Optional["Response"]:
         """Frame.goto
 
@@ -3262,7 +3417,7 @@ class Frame(SyncBase):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Response"]:
         """Frame.expect_navigation
 
@@ -3322,7 +3477,7 @@ class Frame(SyncBase):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Frame.wait_for_url
 
@@ -3370,7 +3525,7 @@ class Frame(SyncBase):
             Literal["domcontentloaded", "load", "networkidle"]
         ] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Frame.wait_for_load_state
 
@@ -3379,6 +3534,9 @@ class Frame(SyncBase):
         This returns when the frame reaches a required load state, `load` by default. The navigation must have been
         committed when this method is called. If current document has already reached the required state, resolves
         immediately.
+
+        **NOTE** Most of the time, this method is not needed because Playwright
+        [auto-waits before every action](https://playwright.dev/python/docs/actionability).
 
         **Usage**
 
@@ -3605,7 +3763,7 @@ class Frame(SyncBase):
         timeout: typing.Optional[float] = None,
         state: typing.Optional[
             Literal["attached", "detached", "hidden", "visible"]
-        ] = None
+        ] = None,
     ) -> typing.Optional["ElementHandle"]:
         """Frame.wait_for_selector
 
@@ -3677,7 +3835,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_checked
 
@@ -3713,7 +3871,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_disabled
 
@@ -3749,7 +3907,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_editable
 
@@ -3785,7 +3943,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_enabled
 
@@ -3821,7 +3979,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_hidden
 
@@ -3857,7 +4015,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Frame.is_visible
 
@@ -3895,7 +4053,7 @@ class Frame(SyncBase):
         event_init: typing.Optional[typing.Dict] = None,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Frame.dispatch_event
 
@@ -3967,7 +4125,7 @@ class Frame(SyncBase):
         expression: str,
         arg: typing.Optional[typing.Any] = None,
         *,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> typing.Any:
         """Frame.eval_on_selector
 
@@ -4077,7 +4235,7 @@ class Frame(SyncBase):
         timeout: typing.Optional[float] = None,
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
-        ] = None
+        ] = None,
     ) -> None:
         """Frame.set_content
 
@@ -4129,7 +4287,7 @@ class Frame(SyncBase):
         url: typing.Optional[str] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
         content: typing.Optional[str] = None,
-        type: typing.Optional[str] = None
+        type: typing.Optional[str] = None,
     ) -> "ElementHandle":
         """Frame.add_script_tag
 
@@ -4147,7 +4305,7 @@ class Frame(SyncBase):
         content : Union[str, None]
             Raw JavaScript content to be injected into frame.
         type : Union[str, None]
-            Script type. Use 'module' in order to load a Javascript ES6 module. See
+            Script type. Use 'module' in order to load a JavaScript ES6 module. See
             [script](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script) for more details.
 
         Returns
@@ -4168,7 +4326,7 @@ class Frame(SyncBase):
         *,
         url: typing.Optional[str] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
-        content: typing.Optional[str] = None
+        content: typing.Optional[str] = None,
     ) -> "ElementHandle":
         """Frame.add_style_tag
 
@@ -4203,7 +4361,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -4213,7 +4371,7 @@ class Frame(SyncBase):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.click
 
@@ -4233,9 +4391,10 @@ class Frame(SyncBase):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -4254,12 +4413,15 @@ class Frame(SyncBase):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -4285,7 +4447,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -4294,7 +4456,7 @@ class Frame(SyncBase):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.dblclick
 
@@ -4303,8 +4465,7 @@ class Frame(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the matched element, unless `force` option is set. If
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
-        1. Use `page.mouse` to double click in the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set. Note that if
+        1. Use `page.mouse` to double click in the center of the element, or the specified `position`. if
            the first click of the `dblclick()` triggers a navigation event, this method will throw.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -4317,9 +4478,10 @@ class Frame(SyncBase):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -4333,15 +4495,16 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -4366,14 +4529,14 @@ class Frame(SyncBase):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.tap
 
@@ -4383,7 +4546,6 @@ class Frame(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.touchscreen` to tap the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
         Passing zero timeout disables this.
@@ -4395,9 +4557,10 @@ class Frame(SyncBase):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -4407,15 +4570,16 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -4441,7 +4605,7 @@ class Frame(SyncBase):
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> None:
         """Frame.fill
 
@@ -4467,9 +4631,8 @@ class Frame(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -4497,7 +4660,7 @@ class Frame(SyncBase):
         has_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has_not_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has: typing.Optional["Locator"] = None,
-        has_not: typing.Optional["Locator"] = None
+        has_not: typing.Optional["Locator"] = None,
     ) -> "Locator":
         """Frame.locator
 
@@ -4555,7 +4718,7 @@ class Frame(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_alt_text
 
@@ -4592,7 +4755,7 @@ class Frame(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_label
 
@@ -4633,7 +4796,7 @@ class Frame(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_placeholder
 
@@ -4765,7 +4928,7 @@ class Frame(SyncBase):
         name: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         pressed: typing.Optional[bool] = None,
         selected: typing.Optional[bool] = None,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_role
 
@@ -4819,6 +4982,7 @@ class Frame(SyncBase):
 
             **NOTE** Unlike most other attributes, `disabled` is inherited through the DOM hierarchy. Learn more about
             [`aria-disabled`](https://www.w3.org/TR/wai-aria-1.2/#aria-disabled).
+
         expanded : Union[bool, None]
             An attribute that is usually set by `aria-expanded`.
 
@@ -4912,7 +5076,7 @@ class Frame(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_text
 
@@ -4976,7 +5140,7 @@ class Frame(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Frame.get_by_title
 
@@ -5044,7 +5208,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Frame.focus
 
@@ -5075,7 +5239,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Optional[str]:
         """Frame.text_content
 
@@ -5111,7 +5275,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Frame.inner_text
 
@@ -5147,7 +5311,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Frame.inner_html
 
@@ -5184,7 +5348,7 @@ class Frame(SyncBase):
         name: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Optional[str]:
         """Frame.get_attribute
 
@@ -5222,14 +5386,14 @@ class Frame(SyncBase):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         force: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.hover
 
@@ -5239,7 +5403,6 @@ class Frame(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to hover over the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
         Passing zero timeout disables this.
@@ -5249,9 +5412,10 @@ class Frame(SyncBase):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -5259,9 +5423,8 @@ class Frame(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         strict : Union[bool, None]
@@ -5269,7 +5432,9 @@ class Frame(SyncBase):
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -5298,7 +5463,7 @@ class Frame(SyncBase):
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.drag_and_drop
 
@@ -5319,9 +5484,8 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -5362,7 +5526,7 @@ class Frame(SyncBase):
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> typing.List[str]:
         """Frame.select_option
 
@@ -5407,9 +5571,8 @@ class Frame(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -5442,7 +5605,7 @@ class Frame(SyncBase):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Frame.input_value
 
@@ -5490,7 +5653,7 @@ class Frame(SyncBase):
         *,
         strict: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Frame.set_input_files
 
@@ -5515,9 +5678,8 @@ class Frame(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -5540,7 +5702,7 @@ class Frame(SyncBase):
         delay: typing.Optional[float] = None,
         strict: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Frame.type
 
@@ -5567,9 +5729,8 @@ class Frame(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -5593,7 +5754,7 @@ class Frame(SyncBase):
         delay: typing.Optional[float] = None,
         strict: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Frame.press
 
@@ -5606,15 +5767,16 @@ class Frame(SyncBase):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`. `ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
         If `key` is a single character, it is case-sensitive, so the values `a` and `A` will generate different respective
         texts.
 
-        Shortcuts such as `key: \"Control+o\"` or `key: \"Control+Shift+T\"` are supported as well. When specified with the
-        modifier, modifier is pressed and being held while the subsequent key is being pressed.
+        Shortcuts such as `key: \"Control+o\"`, `key: \"Control++` or `key: \"Control+Shift+T\"` are supported as well. When
+        specified with the modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
         Parameters
         ----------
@@ -5635,6 +5797,7 @@ class Frame(SyncBase):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         """
 
         return mapping.from_maybe_impl(
@@ -5659,7 +5822,7 @@ class Frame(SyncBase):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.check
 
@@ -5671,7 +5834,6 @@ class Frame(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -5691,9 +5853,8 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -5725,7 +5886,7 @@ class Frame(SyncBase):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.uncheck
 
@@ -5737,7 +5898,6 @@ class Frame(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -5757,9 +5917,8 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -5806,7 +5965,7 @@ class Frame(SyncBase):
         *,
         arg: typing.Optional[typing.Any] = None,
         timeout: typing.Optional[float] = None,
-        polling: typing.Optional[typing.Union[float, Literal["raf"]]] = None
+        polling: typing.Optional[typing.Union[float, Literal["raf"]]] = None,
     ) -> "JSHandle":
         """Frame.wait_for_function
 
@@ -5892,7 +6051,7 @@ class Frame(SyncBase):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Frame.set_checked
 
@@ -5904,7 +6063,6 @@ class Frame(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked or unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -5926,9 +6084,8 @@ class Frame(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -5957,6 +6114,7 @@ mapping.register(FrameImpl, Frame)
 
 
 class FrameLocator(SyncBase):
+
     @property
     def first(self) -> "FrameLocator":
         """FrameLocator.first
@@ -5981,6 +6139,32 @@ class FrameLocator(SyncBase):
         """
         return mapping.from_impl(self._impl_obj.last)
 
+    @property
+    def owner(self) -> "Locator":
+        """FrameLocator.owner
+
+        Returns a `Locator` object pointing to the same `iframe` as this frame locator.
+
+        Useful when you have a `FrameLocator` object obtained somewhere, and later on would like to interact with the
+        `iframe` element.
+
+        For a reverse operation, use `locator.content_frame()`.
+
+        **Usage**
+
+        ```py
+        frame_locator = page.locator(\"iframe[name=\\\"embedded\\\"]\").content_frame
+        # ...
+        locator = frame_locator.owner
+        expect(locator).to_be_visible()
+        ```
+
+        Returns
+        -------
+        Locator
+        """
+        return mapping.from_impl(self._impl_obj.owner)
+
     def locator(
         self,
         selector_or_locator: typing.Union["Locator", str],
@@ -5988,7 +6172,7 @@ class FrameLocator(SyncBase):
         has_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has_not_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has: typing.Optional["Locator"] = None,
-        has_not: typing.Optional["Locator"] = None
+        has_not: typing.Optional["Locator"] = None,
     ) -> "Locator":
         """FrameLocator.locator
 
@@ -6043,7 +6227,7 @@ class FrameLocator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_alt_text
 
@@ -6080,7 +6264,7 @@ class FrameLocator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_label
 
@@ -6121,7 +6305,7 @@ class FrameLocator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_placeholder
 
@@ -6253,7 +6437,7 @@ class FrameLocator(SyncBase):
         name: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         pressed: typing.Optional[bool] = None,
         selected: typing.Optional[bool] = None,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_role
 
@@ -6307,6 +6491,7 @@ class FrameLocator(SyncBase):
 
             **NOTE** Unlike most other attributes, `disabled` is inherited through the DOM hierarchy. Learn more about
             [`aria-disabled`](https://www.w3.org/TR/wai-aria-1.2/#aria-disabled).
+
         expanded : Union[bool, None]
             An attribute that is usually set by `aria-expanded`.
 
@@ -6400,7 +6585,7 @@ class FrameLocator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_text
 
@@ -6464,7 +6649,7 @@ class FrameLocator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """FrameLocator.get_by_title
 
@@ -6538,6 +6723,7 @@ mapping.register(FrameLocatorImpl, FrameLocator)
 
 
 class Worker(SyncBase):
+
     def on(
         self, event: Literal["close"], f: typing.Callable[["Worker"], "None"]
     ) -> None:
@@ -6636,13 +6822,14 @@ mapping.register(WorkerImpl, Worker)
 
 
 class Selectors(SyncBase):
+
     def register(
         self,
         name: str,
         script: typing.Optional[str] = None,
         *,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
-        content_script: typing.Optional[bool] = None
+        content_script: typing.Optional[bool] = None,
     ) -> None:
         """Selectors.register
 
@@ -6730,7 +6917,175 @@ class Selectors(SyncBase):
 mapping.register(SelectorsImpl, Selectors)
 
 
+class Clock(SyncBase):
+
+    def install(
+        self,
+        *,
+        time: typing.Optional[typing.Union[float, str, datetime.datetime]] = None,
+    ) -> None:
+        """Clock.install
+
+        Install fake implementations for the following time-related functions:
+        - `Date`
+        - `setTimeout`
+        - `clearTimeout`
+        - `setInterval`
+        - `clearInterval`
+        - `requestAnimationFrame`
+        - `cancelAnimationFrame`
+        - `requestIdleCallback`
+        - `cancelIdleCallback`
+        - `performance`
+
+        Fake timers are used to manually control the flow of time in tests. They allow you to advance time, fire timers,
+        and control the behavior of time-dependent functions. See `clock.run_for()` and
+        `clock.fast_forward()` for more information.
+
+        Parameters
+        ----------
+        time : Union[datetime.datetime, float, str, None]
+            Time to initialize with, current system time by default.
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.install(time=time)))
+
+    def fast_forward(self, ticks: typing.Union[int, str]) -> None:
+        """Clock.fast_forward
+
+        Advance the clock by jumping forward in time. Only fires due timers at most once. This is equivalent to user
+        closing the laptop lid for a while and reopening it later, after given time.
+
+        **Usage**
+
+        ```py
+        page.clock.fast_forward(1000)
+        page.clock.fast_forward(\"30:00\")
+        ```
+
+        Parameters
+        ----------
+        ticks : Union[int, str]
+            Time may be the number of milliseconds to advance the clock by or a human-readable string. Valid string formats are
+            "08" for eight seconds, "01:00" for one minute and "02:34:10" for two hours, 34 minutes and ten seconds.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.fast_forward(ticks=ticks))
+        )
+
+    def pause_at(self, time: typing.Union[float, str, datetime.datetime]) -> None:
+        """Clock.pause_at
+
+        Advance the clock by jumping forward in time and pause the time. Once this method is called, no timers are fired
+        unless `clock.run_for()`, `clock.fast_forward()`, `clock.pause_at()` or
+        `clock.resume()` is called.
+
+        Only fires due timers at most once. This is equivalent to user closing the laptop lid for a while and reopening it
+        at the specified time and pausing.
+
+        **Usage**
+
+        ```py
+        page.clock.pause_at(datetime.datetime(2020, 2, 2))
+        page.clock.pause_at(\"2020-02-02\")
+        ```
+
+        Parameters
+        ----------
+        time : Union[datetime.datetime, float, str]
+            Time to pause at.
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.pause_at(time=time)))
+
+    def resume(self) -> None:
+        """Clock.resume
+
+        Resumes timers. Once this method is called, time resumes flowing, timers are fired as usual.
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.resume()))
+
+    def run_for(self, ticks: typing.Union[int, str]) -> None:
+        """Clock.run_for
+
+        Advance the clock, firing all the time-related callbacks.
+
+        **Usage**
+
+        ```py
+        page.clock.run_for(1000);
+        page.clock.run_for(\"30:00\")
+        ```
+
+        Parameters
+        ----------
+        ticks : Union[int, str]
+            Time may be the number of milliseconds to advance the clock by or a human-readable string. Valid string formats are
+            "08" for eight seconds, "01:00" for one minute and "02:34:10" for two hours, 34 minutes and ten seconds.
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.run_for(ticks=ticks)))
+
+    def set_fixed_time(self, time: typing.Union[float, str, datetime.datetime]) -> None:
+        """Clock.set_fixed_time
+
+        Makes `Date.now` and `new Date()` return fixed fake time at all times, keeps all the timers running.
+
+        Use this method for simple scenarios where you only need to test with a predefined time. For more advanced
+        scenarios, use `clock.install()` instead. Read docs on [clock emulation](https://playwright.dev/python/docs/clock) to learn more.
+
+        **Usage**
+
+        ```py
+        page.clock.set_fixed_time(datetime.datetime.now())
+        page.clock.set_fixed_time(datetime.datetime(2020, 2, 2))
+        page.clock.set_fixed_time(\"2020-02-02\")
+        ```
+
+        Parameters
+        ----------
+        time : Union[datetime.datetime, float, str]
+            Time to be set.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.set_fixed_time(time=time))
+        )
+
+    def set_system_time(
+        self, time: typing.Union[float, str, datetime.datetime]
+    ) -> None:
+        """Clock.set_system_time
+
+        Sets system time, but does not trigger any timers. Use this to test how the web page reacts to a time shift, for
+        example switching from summer to winter time, or changing time zones.
+
+        **Usage**
+
+        ```py
+        page.clock.set_system_time(datetime.datetime.now())
+        page.clock.set_system_time(datetime.datetime(2020, 2, 2))
+        page.clock.set_system_time(\"2020-02-02\")
+        ```
+
+        Parameters
+        ----------
+        time : Union[datetime.datetime, float, str]
+            Time to be set.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.set_system_time(time=time))
+        )
+
+
+mapping.register(ClockImpl, Clock)
+
+
 class ConsoleMessage(SyncBase):
+
     @property
     def type(self) -> str:
         """ConsoleMessage.type
@@ -6796,6 +7151,7 @@ mapping.register(ConsoleMessageImpl, ConsoleMessage)
 
 
 class Dialog(SyncBase):
+
     @property
     def type(self) -> str:
         """Dialog.type
@@ -6872,6 +7228,7 @@ mapping.register(DialogImpl, Dialog)
 
 
 class Download(SyncBase):
+
     @property
     def page(self) -> "Page":
         """Download.page
@@ -6981,6 +7338,7 @@ mapping.register(DownloadImpl, Download)
 
 
 class Video(SyncBase):
+
     def path(self) -> pathlib.Path:
         """Video.path
 
@@ -7021,6 +7379,7 @@ mapping.register(VideoImpl, Video)
 
 
 class Page(SyncContextManager):
+
     @typing.overload
     def on(self, event: Literal["close"], f: typing.Callable[["Page"], "None"]) -> None:
         """
@@ -7031,8 +7390,7 @@ class Page(SyncContextManager):
         self, event: Literal["console"], f: typing.Callable[["ConsoleMessage"], "None"]
     ) -> None:
         """
-        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also
-        emitted if the page throws an error or a warning.
+        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
         The arguments passed into `console.log` are available on the `ConsoleMessage` event handler argument.
 
@@ -7164,7 +7522,9 @@ class Page(SyncContextManager):
 
         The earliest moment that page is available is when it has navigated to the initial url. For example, when opening a
         popup with `window.open('http://example.com')`, this event will fire when the network request to
-        \"http://example.com\" is done and its response has started loading in the popup.
+        \"http://example.com\" is done and its response has started loading in the popup. If you would like to route/listen
+        to this network request, use `browser_context.route()` and `browser_context.on('request')` respectively
+        instead of similar methods on the `Page`.
 
         ```py
         with page.expect_event(\"popup\") as page_info:
@@ -7246,8 +7606,7 @@ class Page(SyncContextManager):
         self, event: Literal["console"], f: typing.Callable[["ConsoleMessage"], "None"]
     ) -> None:
         """
-        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also
-        emitted if the page throws an error or a warning.
+        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
         The arguments passed into `console.log` are available on the `ConsoleMessage` event handler argument.
 
@@ -7385,7 +7744,9 @@ class Page(SyncContextManager):
 
         The earliest moment that page is available is when it has navigated to the initial url. For example, when opening a
         popup with `window.open('http://example.com')`, this event will fire when the network request to
-        \"http://example.com\" is done and its response has started loading in the popup.
+        \"http://example.com\" is done and its response has started loading in the popup. If you would like to route/listen
+        to this network request, use `browser_context.route()` and `browser_context.on('request')` respectively
+        instead of similar methods on the `Page`.
 
         ```py
         with page.expect_event(\"popup\") as page_info:
@@ -7508,6 +7869,18 @@ class Page(SyncContextManager):
         return mapping.from_impl(self._impl_obj.context)
 
     @property
+    def clock(self) -> "Clock":
+        """Page.clock
+
+        Playwright has ability to mock clock and passage of time.
+
+        Returns
+        -------
+        Clock
+        """
+        return mapping.from_impl(self._impl_obj.clock)
+
+    @property
     def main_frame(self) -> "Frame":
         """Page.main_frame
 
@@ -7610,7 +7983,7 @@ class Page(SyncContextManager):
         *,
         url: typing.Optional[
             typing.Union[str, typing.Pattern[str], typing.Callable[[str], bool]]
-        ] = None
+        ] = None,
     ) -> typing.Optional["Frame"]:
         """Page.frame
 
@@ -7733,7 +8106,7 @@ class Page(SyncContextManager):
         state: typing.Optional[
             Literal["attached", "detached", "hidden", "visible"]
         ] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> typing.Optional["ElementHandle"]:
         """Page.wait_for_selector
 
@@ -7805,7 +8178,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_checked
 
@@ -7841,7 +8214,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_disabled
 
@@ -7877,7 +8250,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_editable
 
@@ -7913,7 +8286,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_enabled
 
@@ -7949,7 +8322,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_hidden
 
@@ -7985,7 +8358,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> bool:
         """Page.is_visible
 
@@ -8023,7 +8396,7 @@ class Page(SyncContextManager):
         event_init: typing.Optional[typing.Dict] = None,
         *,
         timeout: typing.Optional[float] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> None:
         """Page.dispatch_event
 
@@ -8209,7 +8582,7 @@ class Page(SyncContextManager):
         expression: str,
         arg: typing.Optional[typing.Any] = None,
         *,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> typing.Any:
         """Page.eval_on_selector
 
@@ -8302,7 +8675,7 @@ class Page(SyncContextManager):
         url: typing.Optional[str] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
         content: typing.Optional[str] = None,
-        type: typing.Optional[str] = None
+        type: typing.Optional[str] = None,
     ) -> "ElementHandle":
         """Page.add_script_tag
 
@@ -8319,7 +8692,7 @@ class Page(SyncContextManager):
         content : Union[str, None]
             Raw JavaScript content to be injected into frame.
         type : Union[str, None]
-            Script type. Use 'module' in order to load a Javascript ES6 module. See
+            Script type. Use 'module' in order to load a JavaScript ES6 module. See
             [script](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script) for more details.
 
         Returns
@@ -8340,7 +8713,7 @@ class Page(SyncContextManager):
         *,
         url: typing.Optional[str] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
-        content: typing.Optional[str] = None
+        content: typing.Optional[str] = None,
     ) -> "ElementHandle":
         """Page.add_style_tag
 
@@ -8434,7 +8807,7 @@ class Page(SyncContextManager):
         name: str,
         callback: typing.Callable,
         *,
-        handle: typing.Optional[bool] = None
+        handle: typing.Optional[bool] = None,
     ) -> None:
         """Page.expose_binding
 
@@ -8477,22 +8850,6 @@ class Page(SyncContextManager):
             run(playwright)
         ```
 
-        An example of passing an element handle:
-
-        ```py
-        def print(source, element):
-            print(element.text_content())
-
-        page.expose_binding(\"clicked\", print, handle=true)
-        page.set_content(\"\"\"
-          <script>
-            document.addEventListener('click', event => window.clicked(event.target));
-          </script>
-          <div>Click me</div>
-          <div>Or click me</div>
-        \"\"\")
-        ```
-
         Parameters
         ----------
         name : str
@@ -8502,6 +8859,7 @@ class Page(SyncContextManager):
         handle : Union[bool, None]
             Whether to pass the argument as a handle, instead of passing by value. When passing a handle, only one argument is
             supported. When passing by value, multiple arguments are supported.
+            Deprecated: This option will be removed in the future.
         """
 
         return mapping.from_maybe_impl(
@@ -8550,7 +8908,7 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
-        ] = None
+        ] = None,
     ) -> None:
         """Page.set_content
 
@@ -8592,7 +8950,7 @@ class Page(SyncContextManager):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        referer: typing.Optional[str] = None
+        referer: typing.Optional[str] = None,
     ) -> typing.Optional["Response"]:
         """Page.goto
 
@@ -8658,7 +9016,7 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
-        ] = None
+        ] = None,
     ) -> typing.Optional["Response"]:
         """Page.reload
 
@@ -8697,7 +9055,7 @@ class Page(SyncContextManager):
             Literal["domcontentloaded", "load", "networkidle"]
         ] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Page.wait_for_load_state
 
@@ -8706,6 +9064,9 @@ class Page(SyncContextManager):
         This resolves when the page reaches a required load state, `load` by default. The navigation must have been
         committed when this method is called. If current document has already reached the required state, resolves
         immediately.
+
+        **NOTE** Most of the time, this method is not needed because Playwright
+        [auto-waits before every action](https://playwright.dev/python/docs/actionability).
 
         **Usage**
 
@@ -8750,7 +9111,7 @@ class Page(SyncContextManager):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Page.wait_for_url
 
@@ -8797,7 +9158,7 @@ class Page(SyncContextManager):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Any:
         """Page.wait_for_event
 
@@ -8838,12 +9199,12 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
-        ] = None
+        ] = None,
     ) -> typing.Optional["Response"]:
         """Page.go_back
 
         Returns the main resource response. In case of multiple redirects, the navigation will resolve with the response of
-        the last redirect. If can not go back, returns `null`.
+        the last redirect. If cannot go back, returns `null`.
 
         Navigate to the previous page in history.
 
@@ -8878,12 +9239,12 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
-        ] = None
+        ] = None,
     ) -> typing.Optional["Response"]:
         """Page.go_forward
 
         Returns the main resource response. In case of multiple redirects, the navigation will resolve with the response of
-        the last redirect. If can not go forward, returns `null`.
+        the last redirect. If cannot go forward, returns `null`.
 
         Navigate to the next page in history.
 
@@ -8912,6 +9273,28 @@ class Page(SyncContextManager):
             self._sync(self._impl_obj.go_forward(timeout=timeout, waitUntil=wait_until))
         )
 
+    def request_gc(self) -> None:
+        """Page.request_gc
+
+        Request the page to perform garbage collection. Note that there is no guarantee that all unreachable objects will
+        be collected.
+
+        This is useful to help detect memory leaks. For example, if your page has a large object `'suspect'` that might be
+        leaked, you can check that it does not leak by using a
+        [`WeakRef`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WeakRef).
+
+        ```py
+        # 1. In your page, save a WeakRef for the \"suspect\".
+        page.evaluate(\"globalThis.suspectWeakRef = new WeakRef(suspect)\")
+        # 2. Request garbage collection.
+        page.request_gc()
+        # 3. Check that weak ref does not deref to the original object.
+        assert page.evaluate(\"!globalThis.suspectWeakRef.deref()\")
+        ```
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.request_gc()))
+
     def emulate_media(
         self,
         *,
@@ -8922,7 +9305,7 @@ class Page(SyncContextManager):
         reduced_motion: typing.Optional[
             Literal["no-preference", "null", "reduce"]
         ] = None,
-        forced_colors: typing.Optional[Literal["active", "none", "null"]] = None
+        forced_colors: typing.Optional[Literal["active", "none", "null"]] = None,
     ) -> None:
         """Page.emulate_media
 
@@ -8956,7 +9339,6 @@ class Page(SyncContextManager):
         # → True
         page.evaluate(\"matchMedia('(prefers-color-scheme: light)').matches\")
         # → False
-        page.evaluate(\"matchMedia('(prefers-color-scheme: no-preference)').matches\")
         ```
 
         Parameters
@@ -8965,8 +9347,9 @@ class Page(SyncContextManager):
             Changes the CSS media type of the page. The only allowed values are `'Screen'`, `'Print'` and `'Null'`. Passing
             `'Null'` disables CSS media emulation.
         color_scheme : Union["dark", "light", "no-preference", "null", None]
-            Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`.
-            Passing `'Null'` disables color scheme emulation.
+            Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme)
+            media feature, supported values are `'light'` and `'dark'`. Passing `'Null'` disables color scheme emulation.
+            `'no-preference'` is deprecated.
         reduced_motion : Union["no-preference", "null", "reduce", None]
             Emulates `'prefers-reduced-motion'` media feature, supported values are `'reduce'`, `'no-preference'`. Passing
             `null` disables reduced motion emulation.
@@ -9024,7 +9407,7 @@ class Page(SyncContextManager):
         self,
         script: typing.Optional[str] = None,
         *,
-        path: typing.Optional[typing.Union[str, pathlib.Path]] = None
+        path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
     ) -> None:
         """Page.add_init_script
 
@@ -9069,7 +9452,7 @@ class Page(SyncContextManager):
             typing.Callable[["Route", "Request"], typing.Any],
         ],
         *,
-        times: typing.Optional[int] = None
+        times: typing.Optional[int] = None,
     ) -> None:
         """Page.route
 
@@ -9082,7 +9465,10 @@ class Page(SyncContextManager):
 
         **NOTE** `page.route()` will not intercept requests intercepted by Service Worker. See
         [this](https://github.com/microsoft/playwright/issues/1090) issue. We recommend disabling Service Workers when
-        using request interception by setting `Browser.newContext.serviceWorkers` to `'block'`.
+        using request interception by setting `serviceWorkers` to `'block'`.
+
+        **NOTE** `page.route()` will not intercept the first request of a popup page. Use
+        `browser_context.route()` instead.
 
         **Usage**
 
@@ -9108,7 +9494,7 @@ class Page(SyncContextManager):
         some post data, and leaving all other requests as is:
 
         ```py
-        def handle_route(route):
+        def handle_route(route: Route):
           if (\"my-string\" in route.request.post_data):
             route.fulfill(body=\"mocked-data\")
           else:
@@ -9176,10 +9562,55 @@ class Page(SyncContextManager):
             )
         )
 
+    def route_web_socket(
+        self,
+        url: typing.Union[str, typing.Pattern[str], typing.Callable[[str], bool]],
+        handler: typing.Callable[["WebSocketRoute"], typing.Any],
+    ) -> None:
+        """Page.route_web_socket
+
+        This method allows to modify websocket connections that are made by the page.
+
+        Note that only `WebSocket`s created after this method was called will be routed. It is recommended to call this
+        method before navigating the page.
+
+        **Usage**
+
+        Below is an example of a simple mock that responds to a single message. See `WebSocketRoute` for more details and
+        examples.
+
+        ```py
+        def message_handler(ws: WebSocketRoute, message: Union[str, bytes]):
+          if message == \"request\":
+            ws.send(\"response\")
+
+        def handler(ws: WebSocketRoute):
+          ws.on_message(lambda message: message_handler(ws, message))
+
+        page.route_web_socket(\"/ws\", handler)
+        ```
+
+        Parameters
+        ----------
+        url : Union[Callable[[str], bool], Pattern[str], str]
+            Only WebSockets with the url matching this pattern will be routed. A string pattern can be relative to the
+            `baseURL` context option.
+        handler : Callable[[WebSocketRoute], Any]
+            Handler function to route the WebSocket.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.route_web_socket(
+                    url=self._wrap_handler(url), handler=self._wrap_handler(handler)
+                )
+            )
+        )
+
     def unroute_all(
         self,
         *,
-        behavior: typing.Optional[Literal["default", "ignoreErrors", "wait"]] = None
+        behavior: typing.Optional[Literal["default", "ignoreErrors", "wait"]] = None,
     ) -> None:
         """Page.unroute_all
 
@@ -9188,7 +9619,7 @@ class Page(SyncContextManager):
         Parameters
         ----------
         behavior : Union["default", "ignoreErrors", "wait", None]
-            Specifies wether to wait for already running handlers and what to do if they throw errors:
+            Specifies whether to wait for already running handlers and what to do if they throw errors:
             - `'default'` - do not wait for current handler calls (if any) to finish, if unrouted handler throws, it may
               result in unhandled error
             - `'wait'` - wait for current handler calls (if any) to finish
@@ -9208,7 +9639,7 @@ class Page(SyncContextManager):
         not_found: typing.Optional[Literal["abort", "fallback"]] = None,
         update: typing.Optional[bool] = None,
         update_content: typing.Optional[Literal["attach", "embed"]] = None,
-        update_mode: typing.Optional[Literal["full", "minimal"]] = None
+        update_mode: typing.Optional[Literal["full", "minimal"]] = None,
     ) -> None:
         """Page.route_from_har
 
@@ -9217,7 +9648,7 @@ class Page(SyncContextManager):
 
         Playwright will not serve requests intercepted by Service Worker from the HAR file. See
         [this](https://github.com/microsoft/playwright/issues/1090) issue. We recommend disabling Service Workers when
-        using request interception by setting `Browser.newContext.serviceWorkers` to `'block'`.
+        using request interception by setting `serviceWorkers` to `'block'`.
 
         Parameters
         ----------
@@ -9240,7 +9671,8 @@ class Page(SyncContextManager):
             separate files or entries in the ZIP archive. If `embed` is specified, content is stored inline the HAR file.
         update_mode : Union["full", "minimal", None]
             When set to `minimal`, only record information necessary for routing from HAR. This omits sizes, timing, page,
-            cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to `full`.
+            cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to
+            `minimal`.
         """
 
         return mapping.from_maybe_impl(
@@ -9271,7 +9703,7 @@ class Page(SyncContextManager):
         scale: typing.Optional[Literal["css", "device"]] = None,
         mask: typing.Optional[typing.Sequence["Locator"]] = None,
         mask_color: typing.Optional[str] = None,
-        style: typing.Optional[str] = None
+        style: typing.Optional[str] = None,
     ) -> bytes:
         """Page.screenshot
 
@@ -9366,7 +9798,7 @@ class Page(SyncContextManager):
         self,
         *,
         run_before_unload: typing.Optional[bool] = None,
-        reason: typing.Optional[str] = None
+        reason: typing.Optional[str] = None,
     ) -> None:
         """Page.close
 
@@ -9410,7 +9842,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -9420,7 +9852,7 @@ class Page(SyncContextManager):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         trial: typing.Optional[bool] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> None:
         """Page.click
 
@@ -9440,9 +9872,10 @@ class Page(SyncContextManager):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -9461,9 +9894,12 @@ class Page(SyncContextManager):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -9492,7 +9928,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -9501,7 +9937,7 @@ class Page(SyncContextManager):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.dblclick
 
@@ -9511,8 +9947,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to double click in the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set. Note that if
-           the first click of the `dblclick()` triggers a navigation event, this method will throw.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
         Passing zero timeout disables this.
@@ -9524,9 +9958,10 @@ class Page(SyncContextManager):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -9540,15 +9975,16 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -9573,14 +10009,14 @@ class Page(SyncContextManager):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.tap
 
@@ -9590,7 +10026,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.touchscreen` to tap the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
         Passing zero timeout disables this.
@@ -9602,9 +10037,10 @@ class Page(SyncContextManager):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -9614,15 +10050,16 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -9648,7 +10085,7 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> None:
         """Page.fill
 
@@ -9674,9 +10111,8 @@ class Page(SyncContextManager):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -9704,7 +10140,7 @@ class Page(SyncContextManager):
         has_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has_not_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has: typing.Optional["Locator"] = None,
-        has_not: typing.Optional["Locator"] = None
+        has_not: typing.Optional["Locator"] = None,
     ) -> "Locator":
         """Page.locator
 
@@ -9760,7 +10196,7 @@ class Page(SyncContextManager):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_alt_text
 
@@ -9797,7 +10233,7 @@ class Page(SyncContextManager):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_label
 
@@ -9838,7 +10274,7 @@ class Page(SyncContextManager):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_placeholder
 
@@ -9970,7 +10406,7 @@ class Page(SyncContextManager):
         name: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         pressed: typing.Optional[bool] = None,
         selected: typing.Optional[bool] = None,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_role
 
@@ -10024,6 +10460,7 @@ class Page(SyncContextManager):
 
             **NOTE** Unlike most other attributes, `disabled` is inherited through the DOM hierarchy. Learn more about
             [`aria-disabled`](https://www.w3.org/TR/wai-aria-1.2/#aria-disabled).
+
         expanded : Union[bool, None]
             An attribute that is usually set by `aria-expanded`.
 
@@ -10117,7 +10554,7 @@ class Page(SyncContextManager):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_text
 
@@ -10181,7 +10618,7 @@ class Page(SyncContextManager):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Page.get_by_title
 
@@ -10249,7 +10686,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Page.focus
 
@@ -10280,7 +10717,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Optional[str]:
         """Page.text_content
 
@@ -10316,7 +10753,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Page.inner_text
 
@@ -10352,7 +10789,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Page.inner_html
 
@@ -10389,7 +10826,7 @@ class Page(SyncContextManager):
         name: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Optional[str]:
         """Page.get_attribute
 
@@ -10427,14 +10864,14 @@ class Page(SyncContextManager):
         selector: str,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         force: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.hover
 
@@ -10444,7 +10881,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to hover over the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
         Passing zero timeout disables this.
@@ -10454,9 +10890,10 @@ class Page(SyncContextManager):
         selector : str
             A selector to search for an element. If there are multiple elements satisfying the selector, the first will be
             used.
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -10464,9 +10901,8 @@ class Page(SyncContextManager):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         strict : Union[bool, None]
@@ -10474,7 +10910,9 @@ class Page(SyncContextManager):
             element, the call throws an exception.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -10503,7 +10941,7 @@ class Page(SyncContextManager):
         no_wait_after: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.drag_and_drop
 
@@ -10540,9 +10978,8 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         timeout : Union[float, None]
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
@@ -10583,7 +11020,7 @@ class Page(SyncContextManager):
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         force: typing.Optional[bool] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> typing.List[str]:
         """Page.select_option
 
@@ -10629,9 +11066,8 @@ class Page(SyncContextManager):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         strict : Union[bool, None]
@@ -10664,7 +11100,7 @@ class Page(SyncContextManager):
         selector: str,
         *,
         strict: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> str:
         """Page.input_value
 
@@ -10712,12 +11148,13 @@ class Page(SyncContextManager):
         *,
         timeout: typing.Optional[float] = None,
         strict: typing.Optional[bool] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Page.set_input_files
 
         Sets the value of the file input to these file paths or files. If some of the `filePaths` are relative paths, then
-        they are resolved relative to the current working directory. For empty array, clears the selected files.
+        they are resolved relative to the current working directory. For empty array, clears the selected files. For inputs
+        with a `[webkitdirectory]` attribute, only a single directory path is supported.
 
         This method expects `selector` to point to an
         [input element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input). However, if the element is inside
@@ -10737,9 +11174,8 @@ class Page(SyncContextManager):
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -10762,7 +11198,7 @@ class Page(SyncContextManager):
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> None:
         """Page.type
 
@@ -10786,9 +11222,8 @@ class Page(SyncContextManager):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -10815,7 +11250,7 @@ class Page(SyncContextManager):
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        strict: typing.Optional[bool] = None
+        strict: typing.Optional[bool] = None,
     ) -> None:
         """Page.press
 
@@ -10830,15 +11265,16 @@ class Page(SyncContextManager):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`. `ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
         If `key` is a single character, it is case-sensitive, so the values `a` and `A` will generate different respective
         texts.
 
-        Shortcuts such as `key: \"Control+o\"` or `key: \"Control+Shift+T\"` are supported as well. When specified with the
-        modifier, modifier is pressed and being held while the subsequent key is being pressed.
+        Shortcuts such as `key: \"Control+o\"`, `key: \"Control++` or `key: \"Control+Shift+T\"` are supported as well. When
+        specified with the modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
         **Usage**
 
@@ -10870,6 +11306,7 @@ class Page(SyncContextManager):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -10897,7 +11334,7 @@ class Page(SyncContextManager):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.check
 
@@ -10909,7 +11346,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -10929,9 +11365,8 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -10963,7 +11398,7 @@ class Page(SyncContextManager):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.uncheck
 
@@ -10975,7 +11410,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -10995,9 +11429,8 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -11051,7 +11484,7 @@ class Page(SyncContextManager):
         *,
         arg: typing.Optional[typing.Any] = None,
         timeout: typing.Optional[float] = None,
-        polling: typing.Optional[typing.Union[float, Literal["raf"]]] = None
+        polling: typing.Optional[typing.Union[float, Literal["raf"]]] = None,
     ) -> "JSHandle":
         """Page.wait_for_function
 
@@ -11124,8 +11557,7 @@ class Page(SyncContextManager):
         User can inspect selectors or perform manual steps while paused. Resume will continue running the original script
         from the place it was paused.
 
-        **NOTE** This method requires Playwright to be started in a headed mode, with a falsy `headless` value in the
-        `browser_type.launch()`.
+        **NOTE** This method requires Playwright to be started in a headed mode, with a falsy `headless` option.
         """
 
         return mapping.from_maybe_impl(self._sync(self._impl_obj.pause()))
@@ -11145,7 +11577,9 @@ class Page(SyncContextManager):
         height: typing.Optional[typing.Union[str, float]] = None,
         prefer_css_page_size: typing.Optional[bool] = None,
         margin: typing.Optional[PdfMargins] = None,
-        path: typing.Optional[typing.Union[str, pathlib.Path]] = None
+        path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
+        outline: typing.Optional[bool] = None,
+        tagged: typing.Optional[bool] = None,
     ) -> bytes:
         """Page.pdf
 
@@ -11234,6 +11668,10 @@ class Page(SyncContextManager):
         path : Union[pathlib.Path, str, None]
             The file path to save the PDF to. If `path` is a relative path, then it is resolved relative to the current working
             directory. If no path is provided, the PDF won't be saved to the disk.
+        outline : Union[bool, None]
+            Whether or not to embed the document outline into the PDF. Defaults to `false`.
+        tagged : Union[bool, None]
+            Whether or not to generate tagged (accessible) PDF. Defaults to `false`.
 
         Returns
         -------
@@ -11256,6 +11694,8 @@ class Page(SyncContextManager):
                     preferCSSPageSize=prefer_css_page_size,
                     margin=margin,
                     path=path,
+                    outline=outline,
+                    tagged=tagged,
                 )
             )
         )
@@ -11265,7 +11705,7 @@ class Page(SyncContextManager):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager:
         """Page.expect_event
 
@@ -11305,7 +11745,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["ConsoleMessage"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["ConsoleMessage"]:
         """Page.expect_console_message
 
@@ -11336,7 +11776,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["Download"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Download"]:
         """Page.expect_download
 
@@ -11367,7 +11807,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["FileChooser"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["FileChooser"]:
         """Page.expect_file_chooser
 
@@ -11403,7 +11843,7 @@ class Page(SyncContextManager):
         wait_until: typing.Optional[
             Literal["commit", "domcontentloaded", "load", "networkidle"]
         ] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Response"]:
         """Page.expect_navigation
 
@@ -11462,7 +11902,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["Page"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Page"]:
         """Page.expect_popup
 
@@ -11495,7 +11935,7 @@ class Page(SyncContextManager):
             str, typing.Pattern[str], typing.Callable[["Request"], bool]
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Request"]:
         """Page.expect_request
 
@@ -11540,7 +11980,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["Request"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Request"]:
         """Page.expect_request_finished
 
@@ -11573,7 +12013,7 @@ class Page(SyncContextManager):
             str, typing.Pattern[str], typing.Callable[["Response"], bool]
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Response"]:
         """Page.expect_response
 
@@ -11589,7 +12029,7 @@ class Page(SyncContextManager):
         return response.ok
 
         # or with a lambda
-        with page.expect_response(lambda response: response.url == \"https://example.com\" and response.status == 200) as response_info:
+        with page.expect_response(lambda response: response.url == \"https://example.com\" and response.status == 200 and response.request.method == \"get\") as response_info:
             page.get_by_text(\"trigger response\").click()
         response = response_info.value
         return response.ok
@@ -11620,7 +12060,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["WebSocket"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["WebSocket"]:
         """Page.expect_websocket
 
@@ -11651,7 +12091,7 @@ class Page(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["Worker"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Worker"]:
         """Page.expect_worker
 
@@ -11688,7 +12128,7 @@ class Page(SyncContextManager):
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
         strict: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Page.set_checked
 
@@ -11700,7 +12140,6 @@ class Page(SyncContextManager):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked or unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -11722,9 +12161,8 @@ class Page(SyncContextManager):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         strict : Union[bool, None]
             When true, the call requires selector to resolve to a single element. If given selector resolves to more than one
             element, the call throws an exception.
@@ -11748,11 +12186,152 @@ class Page(SyncContextManager):
             )
         )
 
+    def add_locator_handler(
+        self,
+        locator: "Locator",
+        handler: typing.Union[
+            typing.Callable[["Locator"], typing.Any], typing.Callable[[], typing.Any]
+        ],
+        *,
+        no_wait_after: typing.Optional[bool] = None,
+        times: typing.Optional[int] = None,
+    ) -> None:
+        """Page.add_locator_handler
+
+        When testing a web page, sometimes unexpected overlays like a \"Sign up\" dialog appear and block actions you want to
+        automate, e.g. clicking a button. These overlays don't always show up in the same way or at the same time, making
+        them tricky to handle in automated tests.
+
+        This method lets you set up a special function, called a handler, that activates when it detects that overlay is
+        visible. The handler's job is to remove the overlay, allowing your test to continue as if the overlay wasn't there.
+
+        Things to keep in mind:
+        - When an overlay is shown predictably, we recommend explicitly waiting for it in your test and dismissing it as
+          a part of your normal test flow, instead of using `page.add_locator_handler()`.
+        - Playwright checks for the overlay every time before executing or retrying an action that requires an
+          [actionability check](https://playwright.dev/python/docs/actionability), or before performing an auto-waiting assertion check. When overlay
+          is visible, Playwright calls the handler first, and then proceeds with the action/assertion. Note that the
+          handler is only called when you perform an action/assertion - if the overlay becomes visible but you don't
+          perform any actions, the handler will not be triggered.
+        - After executing the handler, Playwright will ensure that overlay that triggered the handler is not visible
+          anymore. You can opt-out of this behavior with `noWaitAfter`.
+        - The execution time of the handler counts towards the timeout of the action/assertion that executed the handler.
+          If your handler takes too long, it might cause timeouts.
+        - You can register multiple handlers. However, only a single handler will be running at a time. Make sure the
+          actions within a handler don't depend on another handler.
+
+        **NOTE** Running the handler will alter your page state mid-test. For example it will change the currently focused
+        element and move the mouse. Make sure that actions that run after the handler are self-contained and do not rely on
+        the focus and mouse state being unchanged.
+
+        For example, consider a test that calls `locator.focus()` followed by `keyboard.press()`. If your
+        handler clicks a button between these two actions, the focused element most likely will be wrong, and key press
+        will happen on the unexpected element. Use `locator.press()` instead to avoid this problem.
+
+        Another example is a series of mouse actions, where `mouse.move()` is followed by `mouse.down()`.
+        Again, when the handler runs between these two actions, the mouse position will be wrong during the mouse down.
+        Prefer self-contained actions like `locator.click()` that do not rely on the state being unchanged by a
+        handler.
+
+        **Usage**
+
+        An example that closes a \"Sign up to the newsletter\" dialog when it appears:
+
+        ```py
+        # Setup the handler.
+        def handler():
+          await page.get_by_role(\"button\", name=\"No thanks\").click()
+        await page.add_locator_handler(page.get_by_text(\"Sign up to the newsletter\"), handler)
+
+        # Write the test as usual.
+        await page.goto(\"https://example.com\")
+        await page.get_by_role(\"button\", name=\"Start here\").click()
+        ```
+
+        An example that skips the \"Confirm your security details\" page when it is shown:
+
+        ```py
+        # Setup the handler.
+        def handler():
+          await page.get_by_role(\"button\", name=\"Remind me later\").click()
+        await page.add_locator_handler(page.get_by_text(\"Confirm your security details\"), handler)
+
+        # Write the test as usual.
+        await page.goto(\"https://example.com\")
+        await page.get_by_role(\"button\", name=\"Start here\").click()
+        ```
+
+        An example with a custom callback on every actionability check. It uses a `<body>` locator that is always visible,
+        so the handler is called before every actionability check. It is important to specify `noWaitAfter`, because the
+        handler does not hide the `<body>` element.
+
+        ```py
+        # Setup the handler.
+        def handler():
+          await page.evaluate(\"window.removeObstructionsForTestIfNeeded()\")
+        await page.add_locator_handler(page.locator(\"body\"), handler, no_wait_after=True)
+
+        # Write the test as usual.
+        await page.goto(\"https://example.com\")
+        await page.get_by_role(\"button\", name=\"Start here\").click()
+        ```
+
+        Handler takes the original locator as an argument. You can also automatically remove the handler after a number of
+        invocations by setting `times`:
+
+        ```py
+        def handler(locator):
+          await locator.click()
+        await page.add_locator_handler(page.get_by_label(\"Close\"), handler, times=1)
+        ```
+
+        Parameters
+        ----------
+        locator : Locator
+            Locator that triggers the handler.
+        handler : Union[Callable[[Locator], Any], Callable[[], Any]]
+            Function that should be run once `locator` appears. This function should get rid of the element that blocks actions
+            like click.
+        no_wait_after : Union[bool, None]
+            By default, after calling the handler Playwright will wait until the overlay becomes hidden, and only then
+            Playwright will continue with the action/assertion that triggered the handler. This option allows to opt-out of
+            this behavior, so that overlay can stay visible after the handler has run.
+        times : Union[int, None]
+            Specifies the maximum number of times this handler should be called. Unlimited by default.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.add_locator_handler(
+                    locator=locator._impl_obj,
+                    handler=self._wrap_handler(handler),
+                    noWaitAfter=no_wait_after,
+                    times=times,
+                )
+            )
+        )
+
+    def remove_locator_handler(self, locator: "Locator") -> None:
+        """Page.remove_locator_handler
+
+        Removes all locator handlers added by `page.add_locator_handler()` for a specific locator.
+
+        Parameters
+        ----------
+        locator : Locator
+            Locator passed to `page.add_locator_handler()`.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.remove_locator_handler(locator=locator._impl_obj))
+        )
+
 
 mapping.register(PageImpl, Page)
 
 
 class WebError(SyncBase):
+
     @property
     def page(self) -> typing.Optional["Page"]:
         """WebError.page
@@ -11782,6 +12361,7 @@ mapping.register(WebErrorImpl, WebError)
 
 
 class BrowserContext(SyncContextManager):
+
     @typing.overload
     def on(
         self, event: Literal["backgroundpage"], f: typing.Callable[["Page"], "None"]
@@ -11810,8 +12390,7 @@ class BrowserContext(SyncContextManager):
         self, event: Literal["console"], f: typing.Callable[["ConsoleMessage"], "None"]
     ) -> None:
         """
-        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also
-        emitted if the page throws an error or a warning.
+        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
         The arguments passed into `console.log` and the page are available on the `ConsoleMessage` event handler argument.
 
@@ -11854,7 +12433,9 @@ class BrowserContext(SyncContextManager):
 
         The earliest moment that page is available is when it has navigated to the initial url. For example, when opening a
         popup with `window.open('http://example.com')`, this event will fire when the network request to
-        \"http://example.com\" is done and its response has started loading in the popup.
+        \"http://example.com\" is done and its response has started loading in the popup. If you would like to route/listen
+        to this network request, use `browser_context.route()` and `browser_context.on('request')` respectively
+        instead of similar methods on the `Page`.
 
         ```py
         with context.expect_page() as page_info:
@@ -11955,8 +12536,7 @@ class BrowserContext(SyncContextManager):
         self, event: Literal["console"], f: typing.Callable[["ConsoleMessage"], "None"]
     ) -> None:
         """
-        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also
-        emitted if the page throws an error or a warning.
+        Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
         The arguments passed into `console.log` and the page are available on the `ConsoleMessage` event handler argument.
 
@@ -12001,7 +12581,9 @@ class BrowserContext(SyncContextManager):
 
         The earliest moment that page is available is when it has navigated to the initial url. For example, when opening a
         popup with `window.open('http://example.com')`, this event will fire when the network request to
-        \"http://example.com\" is done and its response has started loading in the popup.
+        \"http://example.com\" is done and its response has started loading in the popup. If you would like to route/listen
+        to this network request, use `browser_context.route()` and `browser_context.on('request')` respectively
+        instead of similar methods on the `Page`.
 
         ```py
         with context.expect_page() as page_info:
@@ -12148,6 +12730,18 @@ class BrowserContext(SyncContextManager):
         """
         return mapping.from_impl(self._impl_obj.request)
 
+    @property
+    def clock(self) -> "Clock":
+        """BrowserContext.clock
+
+        Playwright has ability to mock clock and passage of time.
+
+        Returns
+        -------
+        Clock
+        """
+        return mapping.from_impl(self._impl_obj.clock)
+
     def set_default_navigation_timeout(self, timeout: float) -> None:
         """BrowserContext.set_default_navigation_timeout
 
@@ -12240,22 +12834,48 @@ class BrowserContext(SyncContextManager):
         Parameters
         ----------
         cookies : Sequence[{name: str, value: str, url: Union[str, None], domain: Union[str, None], path: Union[str, None], expires: Union[float, None], httpOnly: Union[bool, None], secure: Union[bool, None], sameSite: Union["Lax", "None", "Strict", None]}]
-            Adds cookies to the browser context.
-
-            For the cookie to apply to all subdomains as well, prefix domain with a dot, like this: ".example.com".
         """
 
         return mapping.from_maybe_impl(
             self._sync(self._impl_obj.add_cookies(cookies=mapping.to_impl(cookies)))
         )
 
-    def clear_cookies(self) -> None:
+    def clear_cookies(
+        self,
+        *,
+        name: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
+        domain: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
+        path: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
+    ) -> None:
         """BrowserContext.clear_cookies
 
-        Clears context cookies.
+        Removes cookies from context. Accepts optional filter.
+
+        **Usage**
+
+        ```py
+        context.clear_cookies()
+        context.clear_cookies(name=\"session-id\")
+        context.clear_cookies(domain=\"my-origin.com\")
+        context.clear_cookies(path=\"/api/v1\")
+        context.clear_cookies(name=\"session-id\", domain=\"my-origin.com\")
+        ```
+
+        Parameters
+        ----------
+        name : Union[Pattern[str], str, None]
+            Only removes cookies with the given name.
+        domain : Union[Pattern[str], str, None]
+            Only removes cookies with the given domain.
+        path : Union[Pattern[str], str, None]
+            Only removes cookies with the given path.
         """
 
-        return mapping.from_maybe_impl(self._sync(self._impl_obj.clear_cookies()))
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.clear_cookies(name=name, domain=domain, path=path)
+            )
+        )
 
     def grant_permissions(
         self, permissions: typing.Sequence[str], *, origin: typing.Optional[str] = None
@@ -12269,21 +12889,22 @@ class BrowserContext(SyncContextManager):
         ----------
         permissions : Sequence[str]
             A permission or an array of permissions to grant. Permissions can be one of the following values:
-            - `'geolocation'`
-            - `'midi'`
-            - `'midi-sysex'` (system-exclusive midi)
-            - `'notifications'`
-            - `'camera'`
-            - `'microphone'`
-            - `'background-sync'`
-            - `'ambient-light-sensor'`
             - `'accelerometer'`
-            - `'gyroscope'`
-            - `'magnetometer'`
             - `'accessibility-events'`
+            - `'ambient-light-sensor'`
+            - `'background-sync'`
+            - `'camera'`
             - `'clipboard-read'`
             - `'clipboard-write'`
+            - `'geolocation'`
+            - `'gyroscope'`
+            - `'magnetometer'`
+            - `'microphone'`
+            - `'midi-sysex'` (system-exclusive midi)
+            - `'midi'`
+            - `'notifications'`
             - `'payment-handler'`
+            - `'storage-access'`
         origin : Union[str, None]
             The [origin] to grant permissions to, e.g. "https://example.com".
         """
@@ -12375,7 +12996,7 @@ class BrowserContext(SyncContextManager):
         self,
         script: typing.Optional[str] = None,
         *,
-        path: typing.Optional[typing.Union[str, pathlib.Path]] = None
+        path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
     ) -> None:
         """BrowserContext.add_init_script
 
@@ -12417,7 +13038,7 @@ class BrowserContext(SyncContextManager):
         name: str,
         callback: typing.Callable,
         *,
-        handle: typing.Optional[bool] = None
+        handle: typing.Optional[bool] = None,
     ) -> None:
         """BrowserContext.expose_binding
 
@@ -12458,22 +13079,6 @@ class BrowserContext(SyncContextManager):
             run(playwright)
         ```
 
-        An example of passing an element handle:
-
-        ```py
-        def print(source, element):
-            print(element.text_content())
-
-        context.expose_binding(\"clicked\", print, handle=true)
-        page.set_content(\"\"\"
-          <script>
-            document.addEventListener('click', event => window.clicked(event.target));
-          </script>
-          <div>Click me</div>
-          <div>Or click me</div>
-        \"\"\")
-        ```
-
         Parameters
         ----------
         name : str
@@ -12483,6 +13088,7 @@ class BrowserContext(SyncContextManager):
         handle : Union[bool, None]
             Whether to pass the argument as a handle, instead of passing by value. When passing a handle, only one argument is
             supported. When passing by value, multiple arguments are supported.
+            Deprecated: This option will be removed in the future.
         """
 
         return mapping.from_maybe_impl(
@@ -12561,7 +13167,7 @@ class BrowserContext(SyncContextManager):
             typing.Callable[["Route", "Request"], typing.Any],
         ],
         *,
-        times: typing.Optional[int] = None
+        times: typing.Optional[int] = None,
     ) -> None:
         """BrowserContext.route
 
@@ -12570,7 +13176,7 @@ class BrowserContext(SyncContextManager):
 
         **NOTE** `browser_context.route()` will not intercept requests intercepted by Service Worker. See
         [this](https://github.com/microsoft/playwright/issues/1090) issue. We recommend disabling Service Workers when
-        using request interception by setting `Browser.newContext.serviceWorkers` to `'block'`.
+        using request interception by setting `serviceWorkers` to `'block'`.
 
         **Usage**
 
@@ -12600,7 +13206,7 @@ class BrowserContext(SyncContextManager):
         some post data, and leaving all other requests as is:
 
         ```py
-        def handle_route(route):
+        def handle_route(route: Route):
           if (\"my-string\" in route.request.post_data):
             route.fulfill(body=\"mocked-data\")
           else:
@@ -12669,10 +13275,57 @@ class BrowserContext(SyncContextManager):
             )
         )
 
+    def route_web_socket(
+        self,
+        url: typing.Union[str, typing.Pattern[str], typing.Callable[[str], bool]],
+        handler: typing.Callable[["WebSocketRoute"], typing.Any],
+    ) -> None:
+        """BrowserContext.route_web_socket
+
+        This method allows to modify websocket connections that are made by any page in the browser context.
+
+        Note that only `WebSocket`s created after this method was called will be routed. It is recommended to call this
+        method before creating any pages.
+
+        **Usage**
+
+        Below is an example of a simple handler that blocks some websocket messages. See `WebSocketRoute` for more details
+        and examples.
+
+        ```py
+        def message_handler(ws: WebSocketRoute, message: Union[str, bytes]):
+          if message == \"to-be-blocked\":
+            return
+          ws.send(message)
+
+        def handler(ws: WebSocketRoute):
+          ws.route_send(lambda message: message_handler(ws, message))
+          ws.connect()
+
+        context.route_web_socket(\"/ws\", handler)
+        ```
+
+        Parameters
+        ----------
+        url : Union[Callable[[str], bool], Pattern[str], str]
+            Only WebSockets with the url matching this pattern will be routed. A string pattern can be relative to the
+            `baseURL` context option.
+        handler : Callable[[WebSocketRoute], Any]
+            Handler function to route the WebSocket.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.route_web_socket(
+                    url=self._wrap_handler(url), handler=self._wrap_handler(handler)
+                )
+            )
+        )
+
     def unroute_all(
         self,
         *,
-        behavior: typing.Optional[Literal["default", "ignoreErrors", "wait"]] = None
+        behavior: typing.Optional[Literal["default", "ignoreErrors", "wait"]] = None,
     ) -> None:
         """BrowserContext.unroute_all
 
@@ -12681,7 +13334,7 @@ class BrowserContext(SyncContextManager):
         Parameters
         ----------
         behavior : Union["default", "ignoreErrors", "wait", None]
-            Specifies wether to wait for already running handlers and what to do if they throw errors:
+            Specifies whether to wait for already running handlers and what to do if they throw errors:
             - `'default'` - do not wait for current handler calls (if any) to finish, if unrouted handler throws, it may
               result in unhandled error
             - `'wait'` - wait for current handler calls (if any) to finish
@@ -12701,7 +13354,7 @@ class BrowserContext(SyncContextManager):
         not_found: typing.Optional[Literal["abort", "fallback"]] = None,
         update: typing.Optional[bool] = None,
         update_content: typing.Optional[Literal["attach", "embed"]] = None,
-        update_mode: typing.Optional[Literal["full", "minimal"]] = None
+        update_mode: typing.Optional[Literal["full", "minimal"]] = None,
     ) -> None:
         """BrowserContext.route_from_har
 
@@ -12710,7 +13363,7 @@ class BrowserContext(SyncContextManager):
 
         Playwright will not serve requests intercepted by Service Worker from the HAR file. See
         [this](https://github.com/microsoft/playwright/issues/1090) issue. We recommend disabling Service Workers when
-        using request interception by setting `Browser.newContext.serviceWorkers` to `'block'`.
+        using request interception by setting `serviceWorkers` to `'block'`.
 
         Parameters
         ----------
@@ -12755,7 +13408,7 @@ class BrowserContext(SyncContextManager):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager:
         """BrowserContext.expect_event
 
@@ -12831,7 +13484,7 @@ class BrowserContext(SyncContextManager):
         event: str,
         predicate: typing.Optional[typing.Callable] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Any:
         """BrowserContext.wait_for_event
 
@@ -12870,7 +13523,7 @@ class BrowserContext(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["ConsoleMessage"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["ConsoleMessage"]:
         """BrowserContext.expect_console_message
 
@@ -12902,7 +13555,7 @@ class BrowserContext(SyncContextManager):
         self,
         predicate: typing.Optional[typing.Callable[["Page"], bool]] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> EventContextManager["Page"]:
         """BrowserContext.expect_page
 
@@ -12954,6 +13607,7 @@ mapping.register(BrowserContextImpl, BrowserContext)
 
 
 class CDPSession(SyncBase):
+
     def send(
         self, method: str, params: typing.Optional[typing.Dict] = None
     ) -> typing.Dict:
@@ -12991,6 +13645,7 @@ mapping.register(CDPSessionImpl, CDPSession)
 
 
 class Browser(SyncContextManager):
+
     def on(
         self, event: Literal["disconnected"], f: typing.Callable[["Browser"], "None"]
     ) -> None:
@@ -13021,9 +13676,9 @@ class Browser(SyncContextManager):
 
         ```py
         browser = pw.webkit.launch()
-        print(len(browser.contexts())) # prints `0`
+        print(len(browser.contexts)) # prints `0`
         context = browser.new_context()
-        print(len(browser.contexts())) # prints `1`
+        print(len(browser.contexts)) # prints `1`
         ```
 
         Returns
@@ -13112,7 +13767,8 @@ class Browser(SyncContextManager):
             typing.Union[str, typing.Pattern[str]]
         ] = None,
         record_har_mode: typing.Optional[Literal["full", "minimal"]] = None,
-        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None
+        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None,
+        client_certificates: typing.Optional[typing.List[ClientCertificate]] = None,
     ) -> "BrowserContext":
         """Browser.new_context
 
@@ -13174,7 +13830,7 @@ class Browser(SyncContextManager):
         offline : Union[bool, None]
             Whether to emulate network being offline. Defaults to `false`. Learn more about
             [network emulation](../emulation.md#offline).
-        http_credentials : Union[{username: str, password: str, origin: Union[str, None]}, None]
+        http_credentials : Union[{username: str, password: str, origin: Union[str, None], send: Union["always", "unauthorized", None]}, None]
             Credentials for [HTTP authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication). If no
             origin is specified, the username and password are sent to any servers upon unauthorized responses.
         device_scale_factor : Union[float, None]
@@ -13188,9 +13844,9 @@ class Browser(SyncContextManager):
             Specifies if viewport supports touch events. Defaults to false. Learn more about
             [mobile emulation](../emulation.md#devices).
         color_scheme : Union["dark", "light", "no-preference", "null", None]
-            Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`. See
-            `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
-            `'light'`.
+            Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme)
+            media feature, supported values are `'light'` and `'dark'`. See `page.emulate_media()` for more details.
+            Passing `'null'` resets emulation to system defaults. Defaults to `'light'`.
         reduced_motion : Union["no-preference", "null", "reduce", None]
             Emulates `'prefers-reduced-motion'` media feature, supported values are `'reduce'`, `'no-preference'`. See
             `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
@@ -13203,10 +13859,6 @@ class Browser(SyncContextManager):
             Whether to automatically download all the attachments. Defaults to `true` where all the downloads are accepted.
         proxy : Union[{server: str, bypass: Union[str, None], username: Union[str, None], password: Union[str, None]}, None]
             Network proxy settings to use with this context. Defaults to none.
-
-            **NOTE** For Chromium on Windows the browser needs to be launched with the global proxy for this option to work. If
-            all contexts override the proxy, global proxy will be never used and can be any string, for example `launch({
-            proxy: { server: 'http://per-context' } })`.
         record_har_path : Union[pathlib.Path, str, None]
             Enables [HAR](http://www.softwareishard.com/blog/har-12-spec) recording for all pages into the specified HAR file
             on the filesystem. If not specified, the HAR is not recorded. Make sure to call `browser_context.close()`
@@ -13253,6 +13905,19 @@ class Browser(SyncContextManager):
             Optional setting to control resource content management. If `omit` is specified, content is not persisted. If
             `attach` is specified, resources are persisted as separate files and all of these files are archived along with the
             HAR file. Defaults to `embed`, which stores content inline the HAR file as per HAR specification.
+        client_certificates : Union[Sequence[{origin: str, certPath: Union[pathlib.Path, str, None], cert: Union[bytes, None], keyPath: Union[pathlib.Path, str, None], key: Union[bytes, None], pfxPath: Union[pathlib.Path, str, None], pfx: Union[bytes, None], passphrase: Union[str, None]}], None]
+            TLS Client Authentication allows the server to request a client certificate and verify it.
+
+            **Details**
+
+            An array of client certificates to be used. Each certificate object must have either both `certPath` and `keyPath`,
+            a single `pfxPath`, or their corresponding direct value equivalents (`cert` and `key`, or `pfx`). Optionally,
+            `passphrase` property should be provided if the certificate is encrypted. The `origin` property should be provided
+            with an exact match to the request origin that the certificate is valid for.
+
+            **NOTE** When using WebKit on macOS, accessing `localhost` will not pick up client certificates. You can make it
+            work by replacing `localhost` with `local.playwright`.
+
 
         Returns
         -------
@@ -13296,6 +13961,7 @@ class Browser(SyncContextManager):
                     recordHarUrlFilter=record_har_url_filter,
                     recordHarMode=record_har_mode,
                     recordHarContent=record_har_content,
+                    clientCertificates=client_certificates,
                 )
             )
         )
@@ -13344,7 +14010,8 @@ class Browser(SyncContextManager):
             typing.Union[str, typing.Pattern[str]]
         ] = None,
         record_har_mode: typing.Optional[Literal["full", "minimal"]] = None,
-        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None
+        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None,
+        client_certificates: typing.Optional[typing.List[ClientCertificate]] = None,
     ) -> "Page":
         """Browser.new_page
 
@@ -13390,7 +14057,7 @@ class Browser(SyncContextManager):
         offline : Union[bool, None]
             Whether to emulate network being offline. Defaults to `false`. Learn more about
             [network emulation](../emulation.md#offline).
-        http_credentials : Union[{username: str, password: str, origin: Union[str, None]}, None]
+        http_credentials : Union[{username: str, password: str, origin: Union[str, None], send: Union["always", "unauthorized", None]}, None]
             Credentials for [HTTP authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication). If no
             origin is specified, the username and password are sent to any servers upon unauthorized responses.
         device_scale_factor : Union[float, None]
@@ -13404,9 +14071,9 @@ class Browser(SyncContextManager):
             Specifies if viewport supports touch events. Defaults to false. Learn more about
             [mobile emulation](../emulation.md#devices).
         color_scheme : Union["dark", "light", "no-preference", "null", None]
-            Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`. See
-            `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
-            `'light'`.
+            Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme)
+            media feature, supported values are `'light'` and `'dark'`. See `page.emulate_media()` for more details.
+            Passing `'null'` resets emulation to system defaults. Defaults to `'light'`.
         forced_colors : Union["active", "none", "null", None]
             Emulates `'forced-colors'` media feature, supported values are `'active'`, `'none'`. See
             `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
@@ -13419,10 +14086,6 @@ class Browser(SyncContextManager):
             Whether to automatically download all the attachments. Defaults to `true` where all the downloads are accepted.
         proxy : Union[{server: str, bypass: Union[str, None], username: Union[str, None], password: Union[str, None]}, None]
             Network proxy settings to use with this context. Defaults to none.
-
-            **NOTE** For Chromium on Windows the browser needs to be launched with the global proxy for this option to work. If
-            all contexts override the proxy, global proxy will be never used and can be any string, for example `launch({
-            proxy: { server: 'http://per-context' } })`.
         record_har_path : Union[pathlib.Path, str, None]
             Enables [HAR](http://www.softwareishard.com/blog/har-12-spec) recording for all pages into the specified HAR file
             on the filesystem. If not specified, the HAR is not recorded. Make sure to call `browser_context.close()`
@@ -13469,6 +14132,19 @@ class Browser(SyncContextManager):
             Optional setting to control resource content management. If `omit` is specified, content is not persisted. If
             `attach` is specified, resources are persisted as separate files and all of these files are archived along with the
             HAR file. Defaults to `embed`, which stores content inline the HAR file as per HAR specification.
+        client_certificates : Union[Sequence[{origin: str, certPath: Union[pathlib.Path, str, None], cert: Union[bytes, None], keyPath: Union[pathlib.Path, str, None], key: Union[bytes, None], pfxPath: Union[pathlib.Path, str, None], pfx: Union[bytes, None], passphrase: Union[str, None]}], None]
+            TLS Client Authentication allows the server to request a client certificate and verify it.
+
+            **Details**
+
+            An array of client certificates to be used. Each certificate object must have either both `certPath` and `keyPath`,
+            a single `pfxPath`, or their corresponding direct value equivalents (`cert` and `key`, or `pfx`). Optionally,
+            `passphrase` property should be provided if the certificate is encrypted. The `origin` property should be provided
+            with an exact match to the request origin that the certificate is valid for.
+
+            **NOTE** When using WebKit on macOS, accessing `localhost` will not pick up client certificates. You can make it
+            work by replacing `localhost` with `local.playwright`.
+
 
         Returns
         -------
@@ -13512,6 +14188,7 @@ class Browser(SyncContextManager):
                     recordHarUrlFilter=record_har_url_filter,
                     recordHarMode=record_har_mode,
                     recordHarContent=record_har_content,
+                    clientCertificates=client_certificates,
                 )
             )
         )
@@ -13559,7 +14236,7 @@ class Browser(SyncContextManager):
         page: typing.Optional["Page"] = None,
         path: typing.Optional[typing.Union[str, pathlib.Path]] = None,
         screenshots: typing.Optional[bool] = None,
-        categories: typing.Optional[typing.Sequence[str]] = None
+        categories: typing.Optional[typing.Sequence[str]] = None,
     ) -> None:
         """Browser.start_tracing
 
@@ -13624,6 +14301,7 @@ mapping.register(BrowserImpl, Browser)
 
 
 class BrowserType(SyncBase):
+
     @property
     def name(self) -> str:
         """BrowserType.name
@@ -13671,7 +14349,7 @@ class BrowserType(SyncBase):
         chromium_sandbox: typing.Optional[bool] = None,
         firefox_user_prefs: typing.Optional[
             typing.Dict[str, typing.Union[str, float, bool]]
-        ] = None
+        ] = None,
     ) -> "Browser":
         """BrowserType.launch
 
@@ -13709,9 +14387,12 @@ class BrowserType(SyncBase):
             resolved relative to the current working directory. Note that Playwright only works with the bundled Chromium,
             Firefox or WebKit, use at your own risk.
         channel : Union[str, None]
-            Browser distribution channel.  Supported values are "chrome", "chrome-beta", "chrome-dev", "chrome-canary",
-            "msedge", "msedge-beta", "msedge-dev", "msedge-canary". Read more about using
-            [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
+            Browser distribution channel.
+
+            Use "chromium" to [opt in to new headless mode](../browsers.md#opt-in-to-new-headless-mode).
+
+            Use "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", or
+            "msedge-canary" to use branded [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
         args : Union[Sequence[str], None]
             **NOTE** Use custom browser args at your own risk, as some of them may break Playwright functionality.
 
@@ -13739,6 +14420,7 @@ class BrowserType(SyncBase):
         devtools : Union[bool, None]
             **Chromium-only** Whether to auto-open a Developer Tools panel for each tab. If this option is `true`, the
             `headless` option will be set `false`.
+            Deprecated: Use [debugging tools](../debug.md) instead.
         proxy : Union[{server: str, bypass: Union[str, None], username: Union[str, None], password: Union[str, None]}, None]
             Network proxy settings.
         downloads_path : Union[pathlib.Path, str, None]
@@ -13846,7 +14528,8 @@ class BrowserType(SyncBase):
             typing.Union[str, typing.Pattern[str]]
         ] = None,
         record_har_mode: typing.Optional[Literal["full", "minimal"]] = None,
-        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None
+        record_har_content: typing.Optional[Literal["attach", "embed", "omit"]] = None,
+        client_certificates: typing.Optional[typing.List[ClientCertificate]] = None,
     ) -> "BrowserContext":
         """BrowserType.launch_persistent_context
 
@@ -13864,9 +14547,12 @@ class BrowserType(SyncBase):
             user data directory is the **parent** directory of the "Profile Path" seen at `chrome://version`. Pass an empty
             string to use a temporary directory instead.
         channel : Union[str, None]
-            Browser distribution channel.  Supported values are "chrome", "chrome-beta", "chrome-dev", "chrome-canary",
-            "msedge", "msedge-beta", "msedge-dev", "msedge-canary". Read more about using
-            [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
+            Browser distribution channel.
+
+            Use "chromium" to [opt in to new headless mode](../browsers.md#opt-in-to-new-headless-mode).
+
+            Use "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", or
+            "msedge-canary" to use branded [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
         executable_path : Union[pathlib.Path, str, None]
             Path to a browser executable to run instead of the bundled one. If `executablePath` is a relative path, then it is
             resolved relative to the current working directory. Note that Playwright only works with the bundled Chromium,
@@ -13898,6 +14584,7 @@ class BrowserType(SyncBase):
         devtools : Union[bool, None]
             **Chromium-only** Whether to auto-open a Developer Tools panel for each tab. If this option is `true`, the
             `headless` option will be set `false`.
+            Deprecated: Use [debugging tools](../debug.md) instead.
         proxy : Union[{server: str, bypass: Union[str, None], username: Union[str, None], password: Union[str, None]}, None]
             Network proxy settings.
         downloads_path : Union[pathlib.Path, str, None]
@@ -13941,7 +14628,7 @@ class BrowserType(SyncBase):
         offline : Union[bool, None]
             Whether to emulate network being offline. Defaults to `false`. Learn more about
             [network emulation](../emulation.md#offline).
-        http_credentials : Union[{username: str, password: str, origin: Union[str, None]}, None]
+        http_credentials : Union[{username: str, password: str, origin: Union[str, None], send: Union["always", "unauthorized", None]}, None]
             Credentials for [HTTP authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication). If no
             origin is specified, the username and password are sent to any servers upon unauthorized responses.
         device_scale_factor : Union[float, None]
@@ -13955,9 +14642,9 @@ class BrowserType(SyncBase):
             Specifies if viewport supports touch events. Defaults to false. Learn more about
             [mobile emulation](../emulation.md#devices).
         color_scheme : Union["dark", "light", "no-preference", "null", None]
-            Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`. See
-            `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
-            `'light'`.
+            Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme)
+            media feature, supported values are `'light'` and `'dark'`. See `page.emulate_media()` for more details.
+            Passing `'null'` resets emulation to system defaults. Defaults to `'light'`.
         reduced_motion : Union["no-preference", "null", "reduce", None]
             Emulates `'prefers-reduced-motion'` media feature, supported values are `'reduce'`, `'no-preference'`. See
             `page.emulate_media()` for more details. Passing `'null'` resets emulation to system defaults. Defaults to
@@ -14016,6 +14703,19 @@ class BrowserType(SyncBase):
             Optional setting to control resource content management. If `omit` is specified, content is not persisted. If
             `attach` is specified, resources are persisted as separate files and all of these files are archived along with the
             HAR file. Defaults to `embed`, which stores content inline the HAR file as per HAR specification.
+        client_certificates : Union[Sequence[{origin: str, certPath: Union[pathlib.Path, str, None], cert: Union[bytes, None], keyPath: Union[pathlib.Path, str, None], key: Union[bytes, None], pfxPath: Union[pathlib.Path, str, None], pfx: Union[bytes, None], passphrase: Union[str, None]}], None]
+            TLS Client Authentication allows the server to request a client certificate and verify it.
+
+            **Details**
+
+            An array of client certificates to be used. Each certificate object must have either both `certPath` and `keyPath`,
+            a single `pfxPath`, or their corresponding direct value equivalents (`cert` and `key`, or `pfx`). Optionally,
+            `passphrase` property should be provided if the certificate is encrypted. The `origin` property should be provided
+            with an exact match to the request origin that the certificate is valid for.
+
+            **NOTE** When using WebKit on macOS, accessing `localhost` will not pick up client certificates. You can make it
+            work by replacing `localhost` with `local.playwright`.
+
 
         Returns
         -------
@@ -14074,6 +14774,7 @@ class BrowserType(SyncBase):
                     recordHarUrlFilter=record_har_url_filter,
                     recordHarMode=record_har_mode,
                     recordHarContent=record_har_content,
+                    clientCertificates=client_certificates,
                 )
             )
         )
@@ -14084,7 +14785,7 @@ class BrowserType(SyncBase):
         *,
         timeout: typing.Optional[float] = None,
         slow_mo: typing.Optional[float] = None,
-        headers: typing.Optional[typing.Dict[str, str]] = None
+        headers: typing.Optional[typing.Dict[str, str]] = None,
     ) -> "Browser":
         """BrowserType.connect_over_cdp
 
@@ -14139,7 +14840,7 @@ class BrowserType(SyncBase):
         timeout: typing.Optional[float] = None,
         slow_mo: typing.Optional[float] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
-        expose_network: typing.Optional[str] = None
+        expose_network: typing.Optional[str] = None,
     ) -> "Browser":
         """BrowserType.connect
 
@@ -14195,6 +14896,7 @@ mapping.register(BrowserTypeImpl, BrowserType)
 
 
 class Playwright(SyncBase):
+
     @property
     def devices(self) -> typing.Dict:
         """Playwright.devices
@@ -14286,6 +14988,7 @@ class Playwright(SyncBase):
         return mapping.from_impl(self._impl_obj.request)
 
     def __getitem__(self, value: str) -> "BrowserType":
+
         return mapping.from_impl(self._impl_obj.__getitem__(value=value))
 
     def stop(self) -> None:
@@ -14316,6 +15019,7 @@ mapping.register(PlaywrightImpl, Playwright)
 
 
 class Tracing(SyncBase):
+
     def start(
         self,
         *,
@@ -14323,7 +15027,7 @@ class Tracing(SyncBase):
         title: typing.Optional[str] = None,
         snapshots: typing.Optional[bool] = None,
         screenshots: typing.Optional[bool] = None,
-        sources: typing.Optional[bool] = None
+        sources: typing.Optional[bool] = None,
     ) -> None:
         """Tracing.start
 
@@ -14342,8 +15046,8 @@ class Tracing(SyncBase):
         ----------
         name : Union[str, None]
             If specified, intermediate trace files are going to be saved into the files with the given name prefix inside the
-            `tracesDir` folder specified in `browser_type.launch()`. To specify the final trace zip file name, you need
-            to pass `path` option to `tracing.stop()` instead.
+            `tracesDir` directory specified in `browser_type.launch()`. To specify the final trace zip file name, you
+            need to pass `path` option to `tracing.stop()` instead.
         title : Union[str, None]
             Trace name to be shown in the Trace Viewer.
         snapshots : Union[bool, None]
@@ -14401,8 +15105,8 @@ class Tracing(SyncBase):
             Trace name to be shown in the Trace Viewer.
         name : Union[str, None]
             If specified, intermediate trace files are going to be saved into the files with the given name prefix inside the
-            `tracesDir` folder specified in `browser_type.launch()`. To specify the final trace zip file name, you need
-            to pass `path` option to `tracing.stop_chunk()` instead.
+            `tracesDir` directory specified in `browser_type.launch()`. To specify the final trace zip file name, you
+            need to pass `path` option to `tracing.stop_chunk()` instead.
         """
 
         return mapping.from_maybe_impl(
@@ -14439,11 +15143,54 @@ class Tracing(SyncBase):
 
         return mapping.from_maybe_impl(self._sync(self._impl_obj.stop(path=path)))
 
+    def group(
+        self, name: str, *, location: typing.Optional[TracingGroupLocation] = None
+    ) -> None:
+        """Tracing.group
+
+        **NOTE** Use `test.step` instead when available.
+
+        Creates a new group within the trace, assigning any subsequent API calls to this group, until
+        `tracing.group_end()` is called. Groups can be nested and will be visible in the trace viewer.
+
+        **Usage**
+
+        ```py
+        # All actions between group and group_end
+        # will be shown in the trace viewer as a group.
+        await page.context.tracing.group(\"Open Playwright.dev > API\")
+        await page.goto(\"https://playwright.dev/\")
+        await page.get_by_role(\"link\", name=\"API\").click()
+        await page.context.tracing.group_end()
+        ```
+
+        Parameters
+        ----------
+        name : str
+            Group name shown in the trace viewer.
+        location : Union[{file: str, line: Union[int, None], column: Union[int, None]}, None]
+            Specifies a custom location for the group to be shown in the trace viewer. Defaults to the location of the
+            `tracing.group()` call.
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.group(name=name, location=location))
+        )
+
+    def group_end(self) -> None:
+        """Tracing.group_end
+
+        Closes the last group created by `tracing.group()`.
+        """
+
+        return mapping.from_maybe_impl(self._sync(self._impl_obj.group_end()))
+
 
 mapping.register(TracingImpl, Tracing)
 
 
 class Locator(SyncBase):
+
     @property
     def page(self) -> "Page":
         """Locator.page
@@ -14485,6 +15232,32 @@ class Locator(SyncBase):
         Locator
         """
         return mapping.from_impl(self._impl_obj.last)
+
+    @property
+    def content_frame(self) -> "FrameLocator":
+        """Locator.content_frame
+
+        Returns a `FrameLocator` object pointing to the same `iframe` as this locator.
+
+        Useful when you have a `Locator` object obtained somewhere, and later on would like to interact with the content
+        inside the frame.
+
+        For a reverse operation, use `frame_locator.owner()`.
+
+        **Usage**
+
+        ```py
+        locator = page.locator(\"iframe[name=\\\"embedded\\\"]\")
+        # ...
+        frame_locator = locator.content_frame
+        frame_locator.get_by_role(\"button\").click()
+        ```
+
+        Returns
+        -------
+        FrameLocator
+        """
+        return mapping.from_impl(self._impl_obj.content_frame)
 
     def bounding_box(
         self, *, timeout: typing.Optional[float] = None
@@ -14536,7 +15309,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.check
 
@@ -14550,7 +15323,6 @@ class Locator(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked. If not, this method throws.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
@@ -14575,9 +15347,8 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -14599,7 +15370,7 @@ class Locator(SyncBase):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -14608,7 +15379,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.click
 
@@ -14645,9 +15416,10 @@ class Locator(SyncBase):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -14666,9 +15438,12 @@ class Locator(SyncBase):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -14691,7 +15466,7 @@ class Locator(SyncBase):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         delay: typing.Optional[float] = None,
@@ -14699,7 +15474,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.dblclick
 
@@ -14711,8 +15486,6 @@ class Locator(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to double click in the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set. Note that if
-           the first click of the `dblclick()` triggers a navigation event, this method will throw.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -14723,9 +15496,10 @@ class Locator(SyncBase):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -14739,12 +15513,13 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -14767,7 +15542,7 @@ class Locator(SyncBase):
         type: str,
         event_init: typing.Optional[typing.Dict] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Locator.dispatch_event
 
@@ -14832,7 +15607,7 @@ class Locator(SyncBase):
         expression: str,
         arg: typing.Optional[typing.Any] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> typing.Any:
         """Locator.evaluate
 
@@ -14927,7 +15702,7 @@ class Locator(SyncBase):
         expression: str,
         arg: typing.Optional[typing.Any] = None,
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> "JSHandle":
         """Locator.evaluate_handle
 
@@ -14978,7 +15753,7 @@ class Locator(SyncBase):
         *,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> None:
         """Locator.fill
 
@@ -15010,9 +15785,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         """
@@ -15030,7 +15804,7 @@ class Locator(SyncBase):
         *,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> None:
         """Locator.clear
 
@@ -15058,9 +15832,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         """
@@ -15080,7 +15853,7 @@ class Locator(SyncBase):
         has_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has_not_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has: typing.Optional["Locator"] = None,
-        has_not: typing.Optional["Locator"] = None
+        has_not: typing.Optional["Locator"] = None,
     ) -> "Locator":
         """Locator.locator
 
@@ -15135,7 +15908,7 @@ class Locator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_alt_text
 
@@ -15172,7 +15945,7 @@ class Locator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_label
 
@@ -15213,7 +15986,7 @@ class Locator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_placeholder
 
@@ -15345,7 +16118,7 @@ class Locator(SyncBase):
         name: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         pressed: typing.Optional[bool] = None,
         selected: typing.Optional[bool] = None,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_role
 
@@ -15399,6 +16172,7 @@ class Locator(SyncBase):
 
             **NOTE** Unlike most other attributes, `disabled` is inherited through the DOM hierarchy. Learn more about
             [`aria-disabled`](https://www.w3.org/TR/wai-aria-1.2/#aria-disabled).
+
         expanded : Union[bool, None]
             An attribute that is usually set by `aria-expanded`.
 
@@ -15492,7 +16266,7 @@ class Locator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_text
 
@@ -15556,7 +16330,7 @@ class Locator(SyncBase):
         self,
         text: typing.Union[str, typing.Pattern[str]],
         *,
-        exact: typing.Optional[bool] = None
+        exact: typing.Optional[bool] = None,
     ) -> "Locator":
         """Locator.get_by_title
 
@@ -15679,7 +16453,7 @@ class Locator(SyncBase):
         has_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has_not_text: typing.Optional[typing.Union[str, typing.Pattern[str]]] = None,
         has: typing.Optional["Locator"] = None,
-        has_not: typing.Optional["Locator"] = None
+        has_not: typing.Optional["Locator"] = None,
     ) -> "Locator":
         """Locator.filter
 
@@ -15738,7 +16512,10 @@ class Locator(SyncBase):
     def or_(self, locator: "Locator") -> "Locator":
         """Locator.or_
 
-        Creates a locator that matches either of the two locators.
+        Creates a locator matching all elements that match one or both of the two locators.
+
+        Note that when both locators match something, the resulting locator will have multiple matches and violate
+        [locator strictness](https://playwright.dev/python/docs/locators#strictness) guidelines.
 
         **Usage**
 
@@ -15828,9 +16605,13 @@ class Locator(SyncBase):
         elements.
 
         **NOTE** `locator.all()` does not wait for elements to match the locator, and instead immediately returns
-        whatever is present in the page.  When the list of elements changes dynamically, `locator.all()` will
-        produce unpredictable and flaky results.  When the list of elements is stable, but loaded dynamically, wait for the
-        full list to finish loading before calling `locator.all()`.
+        whatever is present in the page.
+
+        When the list of elements changes dynamically, `locator.all()` will produce unpredictable and flaky
+        results.
+
+        When the list of elements is stable, but loaded dynamically, wait for the full list to finish loading before
+        calling `locator.all()`.
 
         **Usage**
 
@@ -15876,7 +16657,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         trial: typing.Optional[bool] = None,
         source_position: typing.Optional[Position] = None,
-        target_position: typing.Optional[Position] = None
+        target_position: typing.Optional[Position] = None,
     ) -> None:
         """Locator.drag_to
 
@@ -15909,9 +16690,8 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         timeout : Union[float, None]
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
@@ -15971,13 +16751,13 @@ class Locator(SyncBase):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
         force: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.hover
 
@@ -15995,7 +16775,6 @@ class Locator(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to hover over the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -16004,9 +16783,10 @@ class Locator(SyncBase):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -16014,14 +16794,15 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -16294,7 +17075,7 @@ class Locator(SyncBase):
         *,
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Locator.press
 
@@ -16319,15 +17100,16 @@ class Locator(SyncBase):
         `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`,
         etc.
 
-        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+        Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`,
+        `ControlOrMeta`. `ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
         Holding down `Shift` will type the text that corresponds to the `key` in the upper case.
 
         If `key` is a single character, it is case-sensitive, so the values `a` and `A` will generate different respective
         texts.
 
-        Shortcuts such as `key: \"Control+o\"` or `key: \"Control+Shift+T\"` are supported as well. When specified with the
-        modifier, modifier is pressed and being held while the subsequent key is being pressed.
+        Shortcuts such as `key: \"Control+o\"`, `key: \"Control++` or `key: \"Control+Shift+T\"` are supported as well. When
+        specified with the modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
         Parameters
         ----------
@@ -16342,6 +17124,7 @@ class Locator(SyncBase):
             Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
             can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
             navigating to inaccessible pages. Defaults to `false`.
+            Deprecated: This option will default to `true` in the future.
         """
 
         return mapping.from_maybe_impl(
@@ -16365,7 +17148,7 @@ class Locator(SyncBase):
         scale: typing.Optional[Literal["css", "device"]] = None,
         mask: typing.Optional[typing.Sequence["Locator"]] = None,
         mask_color: typing.Optional[str] = None,
-        style: typing.Optional[str] = None
+        style: typing.Optional[str] = None,
     ) -> bytes:
         """Locator.screenshot
 
@@ -16460,6 +17243,61 @@ class Locator(SyncBase):
             )
         )
 
+    def aria_snapshot(self, *, timeout: typing.Optional[float] = None) -> str:
+        """Locator.aria_snapshot
+
+        Captures the aria snapshot of the given element. Read more about [aria snapshots](https://playwright.dev/python/docs/aria-snapshots) and
+        `locator_assertions.to_match_aria_snapshot()` for the corresponding assertion.
+
+        **Usage**
+
+        ```py
+        page.get_by_role(\"link\").aria_snapshot()
+        ```
+
+        **Details**
+
+        This method captures the aria snapshot of the given element. The snapshot is a string that represents the state of
+        the element and its children. The snapshot can be used to assert the state of the element in the test, or to
+        compare it to state in the future.
+
+        The ARIA snapshot is represented using [YAML](https://yaml.org/spec/1.2.2/) markup language:
+        - The keys of the objects are the roles and optional accessible names of the elements.
+        - The values are either text content or an array of child elements.
+        - Generic static text can be represented with the `text` key.
+
+        Below is the HTML markup and the respective ARIA snapshot:
+
+        ```html
+        <ul aria-label=\"Links\">
+          <li><a href=\"/\">Home</a></li>
+          <li><a href=\"/about\">About</a></li>
+        <ul>
+        ```
+
+        ```yml
+        - list \"Links\":
+          - listitem:
+            - link \"Home\"
+          - listitem:
+            - link \"About\"
+        ```
+
+        Parameters
+        ----------
+        timeout : Union[float, None]
+            Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
+            be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
+
+        Returns
+        -------
+        str
+        """
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.aria_snapshot(timeout=timeout))
+        )
+
     def scroll_into_view_if_needed(
         self, *, timeout: typing.Optional[float] = None
     ) -> None:
@@ -16468,6 +17306,8 @@ class Locator(SyncBase):
         This method waits for [actionability](https://playwright.dev/python/docs/actionability) checks, then tries to scroll element into view, unless
         it is completely visible as defined by
         [IntersectionObserver](https://developer.mozilla.org/en-US/docs/Web/API/Intersection_Observer_API)'s `ratio`.
+
+        See [scrolling](https://playwright.dev/python/docs/input#scrolling) for alternative ways to scroll.
 
         Parameters
         ----------
@@ -16491,7 +17331,7 @@ class Locator(SyncBase):
         ] = None,
         timeout: typing.Optional[float] = None,
         no_wait_after: typing.Optional[bool] = None,
-        force: typing.Optional[bool] = None
+        force: typing.Optional[bool] = None,
     ) -> typing.List[str]:
         """Locator.select_option
 
@@ -16546,9 +17386,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
 
@@ -16575,7 +17414,7 @@ class Locator(SyncBase):
         self,
         *,
         force: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """Locator.select_text
 
@@ -16610,11 +17449,12 @@ class Locator(SyncBase):
         ],
         *,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Locator.set_input_files
 
-        Upload file or multiple files into `<input type=file>`.
+        Upload file or multiple files into `<input type=file>`. For inputs with a `[webkitdirectory]` attribute, only a
+        single directory path is supported.
 
         **Usage**
 
@@ -16624,6 +17464,9 @@ class Locator(SyncBase):
 
         # Select multiple files
         page.get_by_label(\"Upload files\").set_input_files(['file1.txt', 'file2.txt'])
+
+        # Select a directory
+        page.get_by_label(\"Upload directory\").set_input_files('mydir')
 
         # Remove all the selected files
         page.get_by_label(\"Upload file\").set_input_files([])
@@ -16653,9 +17496,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -16672,13 +17514,13 @@ class Locator(SyncBase):
         self,
         *,
         modifiers: typing.Optional[
-            typing.Sequence[Literal["Alt", "Control", "Meta", "Shift"]]
+            typing.Sequence[Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]]
         ] = None,
         position: typing.Optional[Position] = None,
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.tap
 
@@ -16690,7 +17532,6 @@ class Locator(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.touchscreen` to tap the center of the element, or the specified `position`.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
 
@@ -16701,9 +17542,10 @@ class Locator(SyncBase):
 
         Parameters
         ----------
-        modifiers : Union[Sequence[Union["Alt", "Control", "Meta", "Shift"]], None]
+        modifiers : Union[Sequence[Union["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]], None]
             Modifier keys to press. Ensures that only these modifiers are pressed during the operation, and then restores
-            current modifiers back. If not specified, currently pressed modifiers are used.
+            current modifiers back. If not specified, currently pressed modifiers are used. "ControlOrMeta" resolves to
+            "Control" on Windows and Linux and to "Meta" on macOS.
         position : Union[{x: float, y: float}, None]
             A point to use relative to the top-left corner of element padding box. If not specified, uses some visible point of
             the element.
@@ -16713,12 +17555,13 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
-            to `false`. Useful to wait until the element is ready for the action without performing it.
+            to `false`. Useful to wait until the element is ready for the action without performing it. Note that keyboard
+            `modifiers` will be pressed regardless of `trial` to allow testing elements which are only visible when those keys
+            are pressed.
         """
 
         return mapping.from_maybe_impl(
@@ -16765,7 +17608,7 @@ class Locator(SyncBase):
         *,
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Locator.type
 
@@ -16786,9 +17629,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -16805,7 +17647,7 @@ class Locator(SyncBase):
         *,
         delay: typing.Optional[float] = None,
         timeout: typing.Optional[float] = None,
-        no_wait_after: typing.Optional[bool] = None
+        no_wait_after: typing.Optional[bool] = None,
     ) -> None:
         """Locator.press_sequentially
 
@@ -16842,9 +17684,8 @@ class Locator(SyncBase):
             Maximum time in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout. The default value can
             be changed by using the `browser_context.set_default_timeout()` or `page.set_default_timeout()` methods.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         """
 
         return mapping.from_maybe_impl(
@@ -16862,7 +17703,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.uncheck
 
@@ -16882,7 +17723,6 @@ class Locator(SyncBase):
         1. Wait for [actionability](https://playwright.dev/python/docs/actionability) checks on the element, unless `force` option is set.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now unchecked. If not, this method throws.
 
         If the element is detached from the DOM at any moment during the action, this method throws.
@@ -16901,9 +17741,8 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -16969,7 +17808,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         state: typing.Optional[
             Literal["attached", "detached", "hidden", "visible"]
-        ] = None
+        ] = None,
     ) -> None:
         """Locator.wait_for
 
@@ -17012,7 +17851,7 @@ class Locator(SyncBase):
         timeout: typing.Optional[float] = None,
         force: typing.Optional[bool] = None,
         no_wait_after: typing.Optional[bool] = None,
-        trial: typing.Optional[bool] = None
+        trial: typing.Optional[bool] = None,
     ) -> None:
         """Locator.set_checked
 
@@ -17033,7 +17872,6 @@ class Locator(SyncBase):
            the element is detached during the checks, the whole action is retried.
         1. Scroll the element into view if needed.
         1. Use `page.mouse` to click in the center of the element.
-        1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
         1. Ensure that the element is now checked or unchecked. If not, this method throws.
 
         When all steps combined have not finished during the specified `timeout`, this method throws a `TimeoutError`.
@@ -17052,9 +17890,8 @@ class Locator(SyncBase):
         force : Union[bool, None]
             Whether to bypass the [actionability](../actionability.md) checks. Defaults to `false`.
         no_wait_after : Union[bool, None]
-            Actions that initiate navigations are waiting for these navigations to happen and for pages to start loading. You
-            can opt out of waiting via setting this flag. You would only need this option in the exceptional cases such as
-            navigating to inaccessible pages. Defaults to `false`.
+            This option has no effect.
+            Deprecated: This option has no effect.
         trial : Union[bool, None]
             When set, this method only performs the [actionability](../actionability.md) checks and skips the action. Defaults
             to `false`. Useful to wait until the element is ready for the action without performing it.
@@ -17087,6 +17924,7 @@ mapping.register(LocatorImpl, Locator)
 
 
 class APIResponse(SyncBase):
+
     @property
     def ok(self) -> bool:
         """APIResponse.ok
@@ -17151,8 +17989,8 @@ class APIResponse(SyncBase):
     def headers_array(self) -> typing.List[NameValue]:
         """APIResponse.headers_array
 
-        An array with all the request HTTP headers associated with this response. Header names are not lower-cased. Headers
-        with multiple entries, such as `Set-Cookie`, appear in the array multiple times.
+        An array with all the response HTTP headers associated with this response. Header names are not lower-cased.
+        Headers with multiple entries, such as `Set-Cookie`, appear in the array multiple times.
 
         Returns
         -------
@@ -17211,22 +18049,30 @@ mapping.register(APIResponseImpl, APIResponse)
 
 
 class APIRequestContext(SyncBase):
-    def dispose(self) -> None:
+
+    def dispose(self, *, reason: typing.Optional[str] = None) -> None:
         """APIRequestContext.dispose
 
         All responses returned by `a_pi_request_context.get()` and similar methods are stored in the memory, so that
         you can later call `a_pi_response.body()`.This method discards all its resources, calling any method on
         disposed `APIRequestContext` will throw an exception.
+
+        Parameters
+        ----------
+        reason : Union[str, None]
+            The reason to be reported to the operations interrupted by the context disposal.
         """
 
-        return mapping.from_maybe_impl(self._sync(self._impl_obj.dispose()))
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.dispose(reason=reason))
+        )
 
     def delete(
         self,
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17237,7 +18083,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.delete
 
@@ -17249,7 +18096,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17265,9 +18112,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17278,6 +18123,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17297,6 +18145,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17306,7 +18155,7 @@ class APIRequestContext(SyncBase):
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17317,7 +18166,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.head
 
@@ -17329,7 +18179,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17345,9 +18195,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17358,6 +18206,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17377,6 +18228,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17386,7 +18238,7 @@ class APIRequestContext(SyncBase):
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17397,7 +18249,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.get
 
@@ -17421,7 +18274,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17437,9 +18290,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17450,6 +18301,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17469,6 +18323,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17478,7 +18333,7 @@ class APIRequestContext(SyncBase):
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17489,7 +18344,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.patch
 
@@ -17501,7 +18357,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17517,9 +18373,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17530,6 +18384,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17549,6 +18406,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17558,7 +18416,7 @@ class APIRequestContext(SyncBase):
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17569,7 +18427,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.put
 
@@ -17581,7 +18440,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17597,9 +18456,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17610,6 +18467,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17629,6 +18489,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17638,7 +18499,7 @@ class APIRequestContext(SyncBase):
         url: str,
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
         data: typing.Optional[typing.Union[typing.Any, str, bytes]] = None,
@@ -17649,7 +18510,8 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.post
 
@@ -17674,11 +18536,11 @@ class APIRequestContext(SyncBase):
         ```
 
         The common way to send file(s) in the body of a request is to upload them as form fields with `multipart/form-data`
-        encoding. You can achieve that with Playwright API like this:
+        encoding. Use `FormData` to construct request body and pass it to the request as `multipart` parameter:
 
         ```python
         api_request_context.post(
-          \"https://example.com/api/uploadScrip'\",
+          \"https://example.com/api/uploadScript'\",
           multipart={
             \"fileField\": {
               \"name\": \"f.js\",
@@ -17692,7 +18554,7 @@ class APIRequestContext(SyncBase):
         ----------
         url : str
             Target URL.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         headers : Union[Dict[str, str], None]
             Allows to set HTTP headers. These headers will apply to the fetched request as well as any redirects initiated by
@@ -17708,9 +18570,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17721,6 +18581,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17740,6 +18603,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17749,7 +18613,7 @@ class APIRequestContext(SyncBase):
         url_or_request: typing.Union[str, "Request"],
         *,
         params: typing.Optional[
-            typing.Dict[str, typing.Union[str, float, bool]]
+            typing.Union[typing.Dict[str, typing.Union[str, float, bool]], str]
         ] = None,
         method: typing.Optional[str] = None,
         headers: typing.Optional[typing.Dict[str, str]] = None,
@@ -17761,23 +18625,24 @@ class APIRequestContext(SyncBase):
         timeout: typing.Optional[float] = None,
         fail_on_status_code: typing.Optional[bool] = None,
         ignore_https_errors: typing.Optional[bool] = None,
-        max_redirects: typing.Optional[int] = None
+        max_redirects: typing.Optional[int] = None,
+        max_retries: typing.Optional[int] = None,
     ) -> "APIResponse":
         """APIRequestContext.fetch
 
         Sends HTTP(S) request and returns its response. The method will populate request cookies from the context and
-        update context cookies from the response. The method will automatically follow redirects. JSON objects can be
-        passed directly to the request.
+        update context cookies from the response. The method will automatically follow redirects.
 
         **Usage**
 
-        The common way to send file(s) in the body of a request is to encode it as form fields with `multipart/form-data`
-        encoding. You can achieve that with Playwright API like this:
+        JSON objects can be passed directly to the request:
+
+        The common way to send file(s) in the body of a request is to upload them as form fields with `multipart/form-data`
+        encoding, by specifiying the `multipart` parameter:
 
         ```python
         api_request_context.fetch(
-          \"https://example.com/api/uploadScrip'\",
-          method=\"post\",
+          \"https://example.com/api/uploadScript\",  method=\"post\",
           multipart={
             \"fileField\": {
               \"name\": \"f.js\",
@@ -17791,7 +18656,7 @@ class APIRequestContext(SyncBase):
         ----------
         url_or_request : Union[Request, str]
             Target URL or Request to get all parameters from.
-        params : Union[Dict[str, Union[bool, float, str]], None]
+        params : Union[Dict[str, Union[bool, float, str]], str, None]
             Query parameters to be sent with the URL.
         method : Union[str, None]
             If set changes the fetch method (e.g. [PUT](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/PUT) or
@@ -17810,9 +18675,7 @@ class APIRequestContext(SyncBase):
         multipart : Union[Dict[str, Union[bool, bytes, float, str, {name: str, mimeType: str, buffer: bytes}]], None]
             Provides an object that will be serialized as html form using `multipart/form-data` encoding and sent as this
             request body. If this parameter is specified `content-type` header will be set to `multipart/form-data` unless
-            explicitly provided. File values can be passed either as
-            [`fs.ReadStream`](https://nodejs.org/api/fs.html#fs_class_fs_readstream) or as file-like object containing file
-            name, mime-type and its content.
+            explicitly provided. File values can be passed as file-like object containing file name, mime-type and its content.
         timeout : Union[float, None]
             Request timeout in milliseconds. Defaults to `30000` (30 seconds). Pass `0` to disable timeout.
         fail_on_status_code : Union[bool, None]
@@ -17823,6 +18686,9 @@ class APIRequestContext(SyncBase):
         max_redirects : Union[int, None]
             Maximum number of request redirects that will be followed automatically. An error will be thrown if the number is
             exceeded. Defaults to `20`. Pass `0` to not follow redirects.
+        max_retries : Union[int, None]
+            Maximum number of times network errors should be retried. Currently only `ECONNRESET` error is retried. Does not
+            retry based on HTTP response codes. An error will be thrown if the limit is exceeded. Defaults to `0` - no retries.
 
         Returns
         -------
@@ -17843,6 +18709,7 @@ class APIRequestContext(SyncBase):
                     failOnStatusCode=fail_on_status_code,
                     ignoreHTTPSErrors=ignore_https_errors,
                     maxRedirects=max_redirects,
+                    maxRetries=max_retries,
                 )
             )
         )
@@ -17873,6 +18740,7 @@ mapping.register(APIRequestContextImpl, APIRequestContext)
 
 
 class APIRequest(SyncBase):
+
     def new_context(
         self,
         *,
@@ -17885,7 +18753,8 @@ class APIRequest(SyncBase):
         timeout: typing.Optional[float] = None,
         storage_state: typing.Optional[
             typing.Union[StorageState, str, pathlib.Path]
-        ] = None
+        ] = None,
+        client_certificates: typing.Optional[typing.List[ClientCertificate]] = None,
     ) -> "APIRequestContext":
         """APIRequest.new_context
 
@@ -17904,7 +18773,7 @@ class APIRequest(SyncBase):
               `http://localhost:3000/bar.html`
         extra_http_headers : Union[Dict[str, str], None]
             An object containing additional HTTP headers to be sent with every request. Defaults to none.
-        http_credentials : Union[{username: str, password: str, origin: Union[str, None]}, None]
+        http_credentials : Union[{username: str, password: str, origin: Union[str, None], send: Union["always", "unauthorized", None]}, None]
             Credentials for [HTTP authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication). If no
             origin is specified, the username and password are sent to any servers upon unauthorized responses.
         ignore_https_errors : Union[bool, None]
@@ -17921,6 +18790,19 @@ class APIRequest(SyncBase):
             information obtained via `browser_context.storage_state()` or `a_pi_request_context.storage_state()`.
             Either a path to the file with saved storage, or the value returned by one of
             `browser_context.storage_state()` or `a_pi_request_context.storage_state()` methods.
+        client_certificates : Union[Sequence[{origin: str, certPath: Union[pathlib.Path, str, None], cert: Union[bytes, None], keyPath: Union[pathlib.Path, str, None], key: Union[bytes, None], pfxPath: Union[pathlib.Path, str, None], pfx: Union[bytes, None], passphrase: Union[str, None]}], None]
+            TLS Client Authentication allows the server to request a client certificate and verify it.
+
+            **Details**
+
+            An array of client certificates to be used. Each certificate object must have either both `certPath` and `keyPath`,
+            a single `pfxPath`, or their corresponding direct value equivalents (`cert` and `key`, or `pfx`). Optionally,
+            `passphrase` property should be provided if the certificate is encrypted. The `origin` property should be provided
+            with an exact match to the request origin that the certificate is valid for.
+
+            **NOTE** When using WebKit on macOS, accessing `localhost` will not pick up client certificates. You can make it
+            work by replacing `localhost` with `local.playwright`.
+
 
         Returns
         -------
@@ -17938,6 +18820,7 @@ class APIRequest(SyncBase):
                     userAgent=user_agent,
                     timeout=timeout,
                     storageState=storage_state,
+                    clientCertificates=client_certificates,
                 )
             )
         )
@@ -17947,11 +18830,12 @@ mapping.register(APIRequestImpl, APIRequest)
 
 
 class PageAssertions(SyncBase):
+
     def to_have_title(
         self,
         title_or_reg_exp: typing.Union[typing.Pattern[str], str],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """PageAssertions.to_have_title
 
@@ -17988,7 +18872,7 @@ class PageAssertions(SyncBase):
         self,
         title_or_reg_exp: typing.Union[typing.Pattern[str], str],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """PageAssertions.not_to_have_title
 
@@ -18015,7 +18899,8 @@ class PageAssertions(SyncBase):
         self,
         url_or_reg_exp: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """PageAssertions.to_have_url
 
@@ -18037,12 +18922,17 @@ class PageAssertions(SyncBase):
             Expected URL string or RegExp.
         timeout : Union[float, None]
             Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
         """
         __tracebackhide__ = True
 
         return mapping.from_maybe_impl(
             self._sync(
-                self._impl_obj.to_have_url(urlOrRegExp=url_or_reg_exp, timeout=timeout)
+                self._impl_obj.to_have_url(
+                    urlOrRegExp=url_or_reg_exp, timeout=timeout, ignoreCase=ignore_case
+                )
             )
         )
 
@@ -18050,7 +18940,8 @@ class PageAssertions(SyncBase):
         self,
         url_or_reg_exp: typing.Union[typing.Pattern[str], str],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """PageAssertions.not_to_have_url
 
@@ -18062,13 +18953,16 @@ class PageAssertions(SyncBase):
             Expected URL string or RegExp.
         timeout : Union[float, None]
             Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
         """
         __tracebackhide__ = True
 
         return mapping.from_maybe_impl(
             self._sync(
                 self._impl_obj.not_to_have_url(
-                    urlOrRegExp=url_or_reg_exp, timeout=timeout
+                    urlOrRegExp=url_or_reg_exp, timeout=timeout, ignoreCase=ignore_case
                 )
             )
         )
@@ -18078,6 +18972,7 @@ mapping.register(PageAssertionsImpl, PageAssertions)
 
 
 class LocatorAssertions(SyncBase):
+
     def to_contain_text(
         self,
         expected: typing.Union[
@@ -18090,7 +18985,7 @@ class LocatorAssertions(SyncBase):
         *,
         use_inner_text: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        ignore_case: typing.Optional[bool] = None
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """LocatorAssertions.to_contain_text
 
@@ -18184,7 +19079,7 @@ class LocatorAssertions(SyncBase):
         *,
         use_inner_text: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        ignore_case: typing.Optional[bool] = None
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """LocatorAssertions.not_to_contain_text
 
@@ -18221,7 +19116,7 @@ class LocatorAssertions(SyncBase):
         value: typing.Union[str, typing.Pattern[str]],
         *,
         ignore_case: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_attribute
 
@@ -18264,7 +19159,7 @@ class LocatorAssertions(SyncBase):
         value: typing.Union[str, typing.Pattern[str]],
         *,
         ignore_case: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_attribute
 
@@ -18302,7 +19197,7 @@ class LocatorAssertions(SyncBase):
             str,
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_class
 
@@ -18359,7 +19254,7 @@ class LocatorAssertions(SyncBase):
             str,
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_class
 
@@ -18436,7 +19331,7 @@ class LocatorAssertions(SyncBase):
         name: str,
         value: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_css
 
@@ -18473,7 +19368,7 @@ class LocatorAssertions(SyncBase):
         name: str,
         value: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_css
 
@@ -18500,7 +19395,7 @@ class LocatorAssertions(SyncBase):
         self,
         id: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_id
 
@@ -18532,7 +19427,7 @@ class LocatorAssertions(SyncBase):
         self,
         id: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_id
 
@@ -18617,7 +19512,7 @@ class LocatorAssertions(SyncBase):
         self,
         value: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_value
 
@@ -18651,7 +19546,7 @@ class LocatorAssertions(SyncBase):
         self,
         value: typing.Union[str, typing.Pattern[str]],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_value
 
@@ -18678,7 +19573,7 @@ class LocatorAssertions(SyncBase):
             typing.Sequence[typing.Union[typing.Pattern[str], str]],
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_have_values
 
@@ -18731,7 +19626,7 @@ class LocatorAssertions(SyncBase):
             typing.Sequence[typing.Union[typing.Pattern[str], str]],
         ],
         *,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_values
 
@@ -18766,7 +19661,7 @@ class LocatorAssertions(SyncBase):
         *,
         use_inner_text: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        ignore_case: typing.Optional[bool] = None
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """LocatorAssertions.to_have_text
 
@@ -18859,7 +19754,7 @@ class LocatorAssertions(SyncBase):
         *,
         use_inner_text: typing.Optional[bool] = None,
         timeout: typing.Optional[float] = None,
-        ignore_case: typing.Optional[bool] = None
+        ignore_case: typing.Optional[bool] = None,
     ) -> None:
         """LocatorAssertions.not_to_have_text
 
@@ -18894,7 +19789,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         attached: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_be_attached
 
@@ -18925,7 +19820,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         timeout: typing.Optional[float] = None,
-        checked: typing.Optional[bool] = None
+        checked: typing.Optional[bool] = None,
     ) -> None:
         """LocatorAssertions.to_be_checked
 
@@ -18956,7 +19851,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         attached: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_be_attached
 
@@ -19041,7 +19936,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         editable: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_be_editable
 
@@ -19074,7 +19969,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         editable: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_be_editable
 
@@ -19139,7 +20034,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         enabled: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_be_enabled
 
@@ -19170,7 +20065,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         enabled: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_be_enabled
 
@@ -19236,7 +20131,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         visible: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_be_visible
 
@@ -19277,7 +20172,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         visible: typing.Optional[bool] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_be_visible
 
@@ -19342,7 +20237,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         ratio: typing.Optional[float] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.to_be_in_viewport
 
@@ -19381,7 +20276,7 @@ class LocatorAssertions(SyncBase):
         self,
         *,
         ratio: typing.Optional[float] = None,
-        timeout: typing.Optional[float] = None
+        timeout: typing.Optional[float] = None,
     ) -> None:
         """LocatorAssertions.not_to_be_in_viewport
 
@@ -19401,11 +20296,430 @@ class LocatorAssertions(SyncBase):
             )
         )
 
+    def to_have_accessible_description(
+        self,
+        description: typing.Union[str, typing.Pattern[str]],
+        *,
+        ignore_case: typing.Optional[bool] = None,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.to_have_accessible_description
+
+        Ensures the `Locator` points to an element with a given
+        [accessible description](https://w3c.github.io/accname/#dfn-accessible-description).
+
+        **Usage**
+
+        ```py
+        locator = page.get_by_test_id(\"save-button\")
+        expect(locator).to_have_accessible_description(\"Save results to disk\")
+        ```
+
+        Parameters
+        ----------
+        description : Union[Pattern[str], str]
+            Expected accessible description.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.to_have_accessible_description(
+                    description=description, ignoreCase=ignore_case, timeout=timeout
+                )
+            )
+        )
+
+    def not_to_have_accessible_description(
+        self,
+        name: typing.Union[str, typing.Pattern[str]],
+        *,
+        ignore_case: typing.Optional[bool] = None,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.not_to_have_accessible_description
+
+        The opposite of `locator_assertions.to_have_accessible_description()`.
+
+        Parameters
+        ----------
+        name : Union[Pattern[str], str]
+            Expected accessible description.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.not_to_have_accessible_description(
+                    name=name, ignoreCase=ignore_case, timeout=timeout
+                )
+            )
+        )
+
+    def to_have_accessible_name(
+        self,
+        name: typing.Union[str, typing.Pattern[str]],
+        *,
+        ignore_case: typing.Optional[bool] = None,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.to_have_accessible_name
+
+        Ensures the `Locator` points to an element with a given
+        [accessible name](https://w3c.github.io/accname/#dfn-accessible-name).
+
+        **Usage**
+
+        ```py
+        locator = page.get_by_test_id(\"save-button\")
+        expect(locator).to_have_accessible_name(\"Save to disk\")
+        ```
+
+        Parameters
+        ----------
+        name : Union[Pattern[str], str]
+            Expected accessible name.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.to_have_accessible_name(
+                    name=name, ignoreCase=ignore_case, timeout=timeout
+                )
+            )
+        )
+
+    def not_to_have_accessible_name(
+        self,
+        name: typing.Union[str, typing.Pattern[str]],
+        *,
+        ignore_case: typing.Optional[bool] = None,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.not_to_have_accessible_name
+
+        The opposite of `locator_assertions.to_have_accessible_name()`.
+
+        Parameters
+        ----------
+        name : Union[Pattern[str], str]
+            Expected accessible name.
+        ignore_case : Union[bool, None]
+            Whether to perform case-insensitive match. `ignoreCase` option takes precedence over the corresponding regular
+            expression flag if specified.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.not_to_have_accessible_name(
+                    name=name, ignoreCase=ignore_case, timeout=timeout
+                )
+            )
+        )
+
+    def to_have_role(
+        self,
+        role: Literal[
+            "alert",
+            "alertdialog",
+            "application",
+            "article",
+            "banner",
+            "blockquote",
+            "button",
+            "caption",
+            "cell",
+            "checkbox",
+            "code",
+            "columnheader",
+            "combobox",
+            "complementary",
+            "contentinfo",
+            "definition",
+            "deletion",
+            "dialog",
+            "directory",
+            "document",
+            "emphasis",
+            "feed",
+            "figure",
+            "form",
+            "generic",
+            "grid",
+            "gridcell",
+            "group",
+            "heading",
+            "img",
+            "insertion",
+            "link",
+            "list",
+            "listbox",
+            "listitem",
+            "log",
+            "main",
+            "marquee",
+            "math",
+            "menu",
+            "menubar",
+            "menuitem",
+            "menuitemcheckbox",
+            "menuitemradio",
+            "meter",
+            "navigation",
+            "none",
+            "note",
+            "option",
+            "paragraph",
+            "presentation",
+            "progressbar",
+            "radio",
+            "radiogroup",
+            "region",
+            "row",
+            "rowgroup",
+            "rowheader",
+            "scrollbar",
+            "search",
+            "searchbox",
+            "separator",
+            "slider",
+            "spinbutton",
+            "status",
+            "strong",
+            "subscript",
+            "superscript",
+            "switch",
+            "tab",
+            "table",
+            "tablist",
+            "tabpanel",
+            "term",
+            "textbox",
+            "time",
+            "timer",
+            "toolbar",
+            "tooltip",
+            "tree",
+            "treegrid",
+            "treeitem",
+        ],
+        *,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.to_have_role
+
+        Ensures the `Locator` points to an element with a given [ARIA role](https://www.w3.org/TR/wai-aria-1.2/#roles).
+
+        Note that role is matched as a string, disregarding the ARIA role hierarchy. For example, asserting  a superclass
+        role `\"checkbox\"` on an element with a subclass role `\"switch\"` will fail.
+
+        **Usage**
+
+        ```py
+        locator = page.get_by_test_id(\"save-button\")
+        expect(locator).to_have_role(\"button\")
+        ```
+
+        Parameters
+        ----------
+        role : Union["alert", "alertdialog", "application", "article", "banner", "blockquote", "button", "caption", "cell", "checkbox", "code", "columnheader", "combobox", "complementary", "contentinfo", "definition", "deletion", "dialog", "directory", "document", "emphasis", "feed", "figure", "form", "generic", "grid", "gridcell", "group", "heading", "img", "insertion", "link", "list", "listbox", "listitem", "log", "main", "marquee", "math", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio", "meter", "navigation", "none", "note", "option", "paragraph", "presentation", "progressbar", "radio", "radiogroup", "region", "row", "rowgroup", "rowheader", "scrollbar", "search", "searchbox", "separator", "slider", "spinbutton", "status", "strong", "subscript", "superscript", "switch", "tab", "table", "tablist", "tabpanel", "term", "textbox", "time", "timer", "toolbar", "tooltip", "tree", "treegrid", "treeitem"]
+            Required aria role.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.to_have_role(role=role, timeout=timeout))
+        )
+
+    def not_to_have_role(
+        self,
+        role: Literal[
+            "alert",
+            "alertdialog",
+            "application",
+            "article",
+            "banner",
+            "blockquote",
+            "button",
+            "caption",
+            "cell",
+            "checkbox",
+            "code",
+            "columnheader",
+            "combobox",
+            "complementary",
+            "contentinfo",
+            "definition",
+            "deletion",
+            "dialog",
+            "directory",
+            "document",
+            "emphasis",
+            "feed",
+            "figure",
+            "form",
+            "generic",
+            "grid",
+            "gridcell",
+            "group",
+            "heading",
+            "img",
+            "insertion",
+            "link",
+            "list",
+            "listbox",
+            "listitem",
+            "log",
+            "main",
+            "marquee",
+            "math",
+            "menu",
+            "menubar",
+            "menuitem",
+            "menuitemcheckbox",
+            "menuitemradio",
+            "meter",
+            "navigation",
+            "none",
+            "note",
+            "option",
+            "paragraph",
+            "presentation",
+            "progressbar",
+            "radio",
+            "radiogroup",
+            "region",
+            "row",
+            "rowgroup",
+            "rowheader",
+            "scrollbar",
+            "search",
+            "searchbox",
+            "separator",
+            "slider",
+            "spinbutton",
+            "status",
+            "strong",
+            "subscript",
+            "superscript",
+            "switch",
+            "tab",
+            "table",
+            "tablist",
+            "tabpanel",
+            "term",
+            "textbox",
+            "time",
+            "timer",
+            "toolbar",
+            "tooltip",
+            "tree",
+            "treegrid",
+            "treeitem",
+        ],
+        *,
+        timeout: typing.Optional[float] = None,
+    ) -> None:
+        """LocatorAssertions.not_to_have_role
+
+        The opposite of `locator_assertions.to_have_role()`.
+
+        Parameters
+        ----------
+        role : Union["alert", "alertdialog", "application", "article", "banner", "blockquote", "button", "caption", "cell", "checkbox", "code", "columnheader", "combobox", "complementary", "contentinfo", "definition", "deletion", "dialog", "directory", "document", "emphasis", "feed", "figure", "form", "generic", "grid", "gridcell", "group", "heading", "img", "insertion", "link", "list", "listbox", "listitem", "log", "main", "marquee", "math", "menu", "menubar", "menuitem", "menuitemcheckbox", "menuitemradio", "meter", "navigation", "none", "note", "option", "paragraph", "presentation", "progressbar", "radio", "radiogroup", "region", "row", "rowgroup", "rowheader", "scrollbar", "search", "searchbox", "separator", "slider", "spinbutton", "status", "strong", "subscript", "superscript", "switch", "tab", "table", "tablist", "tabpanel", "term", "textbox", "time", "timer", "toolbar", "tooltip", "tree", "treegrid", "treeitem"]
+            Required aria role.
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(self._impl_obj.not_to_have_role(role=role, timeout=timeout))
+        )
+
+    def to_match_aria_snapshot(
+        self, expected: str, *, timeout: typing.Optional[float] = None
+    ) -> None:
+        """LocatorAssertions.to_match_aria_snapshot
+
+        Asserts that the target element matches the given [accessibility snapshot](https://playwright.dev/python/docs/aria-snapshots).
+
+        **Usage**
+
+        ```py
+        page.goto(\"https://demo.playwright.dev/todomvc/\")
+        expect(page.locator('body')).to_match_aria_snapshot('''
+          - heading \"todos\"
+          - textbox \"What needs to be done?\"
+        ''')
+        ```
+
+        Parameters
+        ----------
+        expected : str
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.to_match_aria_snapshot(
+                    expected=expected, timeout=timeout
+                )
+            )
+        )
+
+    def not_to_match_aria_snapshot(
+        self, expected: str, *, timeout: typing.Optional[float] = None
+    ) -> None:
+        """LocatorAssertions.not_to_match_aria_snapshot
+
+        The opposite of `locator_assertions.to_match_aria_snapshot()`.
+
+        Parameters
+        ----------
+        expected : str
+        timeout : Union[float, None]
+            Time to retry the assertion for in milliseconds. Defaults to `5000`.
+        """
+        __tracebackhide__ = True
+
+        return mapping.from_maybe_impl(
+            self._sync(
+                self._impl_obj.not_to_match_aria_snapshot(
+                    expected=expected, timeout=timeout
+                )
+            )
+        )
+
 
 mapping.register(LocatorAssertionsImpl, LocatorAssertions)
 
 
 class APIResponseAssertions(SyncBase):
+
     def to_be_ok(self) -> None:
         """APIResponseAssertions.to_be_ok
 

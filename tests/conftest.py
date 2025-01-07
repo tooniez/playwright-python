@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import inspect
 import io
 import json
@@ -20,7 +19,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Dict, Generator, List, Optional, cast
+from typing import Any, Callable, Dict, Generator, List, Optional, cast
 
 import pytest
 from PIL import Image
@@ -30,7 +29,7 @@ from pixelmatch.contrib.PIL import from_PIL_to_raw_data
 import playwright
 from playwright._impl._path_utils import get_file_dirname
 
-from .server import Server, WebSocketServerServer, test_server
+from .server import Server, test_server
 
 _dirname = get_file_dirname()
 
@@ -39,13 +38,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "browser_name" in metafunc.fixturenames:
         browsers = metafunc.config.option.browser or ["chromium", "firefox", "webkit"]
         metafunc.parametrize("browser_name", browsers, scope="session")
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    loop = asyncio.get_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="session")
@@ -76,13 +68,8 @@ def https_server() -> Generator[Server, None, None]:
     yield test_server.https_server
 
 
-@pytest.fixture
-def ws_server() -> Generator[WebSocketServerServer, None, None]:
-    yield test_server.ws_server
-
-
 @pytest.fixture(autouse=True, scope="session")
-async def start_server() -> AsyncGenerator[None, None]:
+def start_server() -> Generator[None, None, None]:
     test_server.start()
     yield
     test_server.stop()
@@ -102,6 +89,14 @@ def browser_name(pytestconfig: pytest.Config) -> str:
 @pytest.fixture(scope="session")
 def browser_channel(pytestconfig: pytest.Config) -> Optional[str]:
     return cast(Optional[str], pytestconfig.getoption("--browser-channel"))
+
+
+@pytest.fixture(scope="session")
+def is_headless_shell(browser_name: str, browser_channel: str, headless: bool) -> bool:
+    return browser_name == "chromium" and (
+        browser_channel == "chromium-headless-shell"
+        or (not browser_channel and headless)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -233,7 +228,7 @@ class RemoteServer:
             node_executable = driver_dir / "node.exe"
         else:
             node_executable = driver_dir / "node"
-        cli_js = driver_dir / "package" / "lib" / "cli" / "cli.js"
+        cli_js = driver_dir / "package" / "cli.js"
         tmpfile.write_text(json.dumps(launch_server_options))
         self.process = subprocess.Popen(
             [

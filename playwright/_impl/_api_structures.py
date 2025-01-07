@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-from typing import Any, Dict, List, Optional, Sequence, Union
-
-if sys.version_info >= (3, 8):  # pragma: no cover
-    from typing import Literal, TypedDict
-else:  # pragma: no cover
-    from typing_extensions import Literal, TypedDict
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Sequence, TypedDict, Union
 
 # These are the structures that we like keeping in a JSON form for their potential
 # reuse between SDKs / services. They are public and are a part of the
@@ -69,6 +64,7 @@ class HttpCredentials(TypedDict, total=False):
     username: str
     password: str
     origin: Optional[str]
+    send: Optional[Literal["always", "unauthorized"]]
 
 
 class LocalStorageEntry(TypedDict):
@@ -103,6 +99,17 @@ class ProxySettings(TypedDict, total=False):
 class StorageState(TypedDict, total=False):
     cookies: List[Cookie]
     origins: List[OriginState]
+
+
+class ClientCertificate(TypedDict, total=False):
+    origin: str
+    certPath: Optional[Union[str, Path]]
+    cert: Optional[bytes]
+    keyPath: Optional[Union[str, Path]]
+    key: Optional[bytes]
+    pfxPath: Optional[Union[str, Path]]
+    pfx: Optional[bytes]
+    passphrase: Optional[str]
 
 
 class ResourceTiming(TypedDict):
@@ -284,3 +291,9 @@ AriaRole = Literal[
     "treegrid",
     "treeitem",
 ]
+
+
+class TracingGroupLocation(TypedDict):
+    file: str
+    line: Optional[int]
+    column: Optional[int]

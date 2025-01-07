@@ -10,7 +10,14 @@
      - `pre-commit install`
      - `pip install -e .`
 * change driver version in `setup.py`
-* download new driver: `python setup.py bdist_wheel`
+* download new driver: `python -m build --wheel`
 * generate API: `./scripts/update_api.sh`
 * commit changes & send PR
 * wait for bots to pass & merge the PR
+
+
+## Fix typing issues with Playwright ToT
+
+1. `cd playwright`
+1. `API_JSON_MODE=1 node utils/doclint/generateApiJson.js > ../playwright-python/playwright/driver/package/api.json`
+1. `./scripts/update_api.sh`

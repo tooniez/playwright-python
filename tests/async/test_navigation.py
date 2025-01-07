@@ -264,7 +264,7 @@ async def test_goto_should_fail_when_main_resources_failed_to_load(
     if is_chromium:
         assert "net::ERR_CONNECTION_REFUSED" in exc_info.value.message
     elif is_webkit and is_win:
-        assert "Couldn't connect to server" in exc_info.value.message
+        assert "Could not connect to server" in exc_info.value.message
     elif is_webkit:
         assert "Could not connect" in exc_info.value.message
     else:
@@ -504,9 +504,10 @@ async def test_wait_for_nav_should_respect_timeout(page: Page, server: Server) -
 async def test_wait_for_nav_should_work_with_both_domcontentloaded_and_load(
     page: Page, server: Server
 ) -> None:
-    async with page.expect_navigation(
-        wait_until="domcontentloaded"
-    ), page.expect_navigation(wait_until="load"):
+    async with (
+        page.expect_navigation(wait_until="domcontentloaded"),
+        page.expect_navigation(wait_until="load"),
+    ):
         await page.goto(server.PREFIX + "/one-style.html")
 
 

@@ -23,9 +23,7 @@ Build and install drivers:
 
 ```sh
 pip install -e .
-python setup.py bdist_wheel
-# For all platforms
-python setup.py bdist_wheel --all
+python -m build --wheel
 ```
 
 Run tests:
@@ -47,7 +45,7 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-For more details look at the [CI configuration](./blob/main/.github/workflows/ci.yml).
+For more details look at the [CI configuration](./.github/workflows/ci.yml).
 
 Collect coverage
 

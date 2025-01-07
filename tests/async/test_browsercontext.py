@@ -32,6 +32,11 @@ from tests.utils import TARGET_CLOSED_ERROR_MESSAGE
 from .utils import Utils
 
 
+@pytest.fixture(scope="session")
+def fails_on_401(browser_name: str, is_headless_shell: bool) -> bool:
+    return browser_name == "chromium" and not is_headless_shell
+
+
 async def test_page_event_should_create_new_context(browser: Browser) -> None:
     assert len(browser.contexts) == 0
     context = await browser.new_context()
@@ -126,7 +131,7 @@ async def test_page_event_should_not_allow_device_scale_factor_with_null_viewpor
         await browser.new_context(no_viewport=True, device_scale_factor=1)
     assert (
         exc_info.value.message
-        == '"deviceScaleFactor" option is not supported with null "viewport"'
+        == 'Browser.new_context: "deviceScaleFactor" option is not supported with null "viewport"'
     )
 
 
@@ -137,7 +142,7 @@ async def test_page_event_should_not_allow_is_mobile_with_null_viewport(
         await browser.new_context(no_viewport=True, is_mobile=True)
     assert (
         exc_info.value.message
-        == '"isMobile" option is not supported with null "viewport"'
+        == 'Browser.new_context: "isMobile" option is not supported with null "viewport"'
     )
 
 
@@ -472,13 +477,17 @@ async def test_expose_bindinghandle_should_work(context: BrowserContext) -> None
 
 
 async def test_auth_should_fail_without_credentials(
-    context: BrowserContext, server: Server
+    context: BrowserContext, server: Server, fails_on_401: bool
 ) -> None:
     server.set_auth("/empty.html", "user", "pass")
     page = await context.new_page()
-    response = await page.goto(server.EMPTY_PAGE)
-    assert response
-    assert response.status == 401
+    try:
+        response = await page.goto(server.EMPTY_PAGE)
+        assert response
+        assert response.status == 401
+    except Error as exc:
+        assert fails_on_401
+        assert "net::ERR_INVALID_AUTH_CREDENTIALS" in exc.message
 
 
 async def test_auth_should_work_with_correct_credentials(
@@ -562,7 +571,7 @@ async def test_should_work_with_correct_credentials_and_matching_origin_case_ins
 
 
 async def test_should_fail_with_correct_credentials_and_mismatching_scheme(
-    browser: Browser, server: Server
+    browser: Browser, server: Server, fails_on_401: bool
 ) -> None:
     server.set_auth("/empty.html", "user", "pass")
     context = await browser.new_context(
@@ -573,14 +582,18 @@ async def test_should_fail_with_correct_credentials_and_mismatching_scheme(
         }
     )
     page = await context.new_page()
-    response = await page.goto(server.EMPTY_PAGE)
-    assert response
-    assert response.status == 401
+    try:
+        response = await page.goto(server.EMPTY_PAGE)
+        assert response
+        assert response.status == 401
+    except Error as exc:
+        assert fails_on_401
+        assert "net::ERR_INVALID_AUTH_CREDENTIALS" in exc.message
     await context.close()
 
 
 async def test_should_fail_with_correct_credentials_and_mismatching_hostname(
-    browser: Browser, server: Server
+    browser: Browser, server: Server, fails_on_401: bool
 ) -> None:
     server.set_auth("/empty.html", "user", "pass")
     hostname = urlparse(server.PREFIX).hostname
@@ -590,14 +603,18 @@ async def test_should_fail_with_correct_credentials_and_mismatching_hostname(
         http_credentials={"username": "user", "password": "pass", "origin": origin}
     )
     page = await context.new_page()
-    response = await page.goto(server.EMPTY_PAGE)
-    assert response
-    assert response.status == 401
+    try:
+        response = await page.goto(server.EMPTY_PAGE)
+        assert response
+        assert response.status == 401
+    except Error as exc:
+        assert fails_on_401
+        assert "net::ERR_INVALID_AUTH_CREDENTIALS" in exc.message
     await context.close()
 
 
 async def test_should_fail_with_correct_credentials_and_mismatching_port(
-    browser: Browser, server: Server
+    browser: Browser, server: Server, fails_on_401: bool
 ) -> None:
     server.set_auth("/empty.html", "user", "pass")
     origin = server.PREFIX.replace(str(server.PORT), str(server.PORT + 1))
@@ -605,9 +622,13 @@ async def test_should_fail_with_correct_credentials_and_mismatching_port(
         http_credentials={"username": "user", "password": "pass", "origin": origin}
     )
     page = await context.new_page()
-    response = await page.goto(server.EMPTY_PAGE)
-    assert response
-    assert response.status == 401
+    try:
+        response = await page.goto(server.EMPTY_PAGE)
+        assert response
+        assert response.status == 401
+    except Error as exc:
+        assert fails_on_401
+        assert "net::ERR_INVALID_AUTH_CREDENTIALS" in exc.message
     await context.close()
 
 
@@ -774,7 +795,7 @@ async def test_page_event_should_work_with_shift_clicking(
 
 @pytest.mark.only_browser("chromium")
 async def test_page_event_should_work_with_ctrl_clicking(
-    context: BrowserContext, server: Server, is_mac: bool
+    context: BrowserContext, server: Server
 ) -> None:
     # Firefox: reports an opener in this case.
     # WebKit: Ctrl+Click does not open a new tab.
@@ -782,7 +803,7 @@ async def test_page_event_should_work_with_ctrl_clicking(
     await page.goto(server.EMPTY_PAGE)
     await page.set_content('<a href="/one-style.html">yo</a>')
     async with context.expect_page() as popup_info:
-        await page.click("a", modifiers=["Meta" if is_mac else "Control"])
+        await page.click("a", modifiers=["ControlOrMeta"])
     popup = await popup_info.value
     assert await popup.opener() is None
 
